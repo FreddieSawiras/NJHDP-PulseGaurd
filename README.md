@@ -96,7 +96,6 @@ Users may be able to participate in challenges involving:
 - Sleep goals
 - Healthy habits
 - Blood pressure tracking
-- Friend-based competitions
 
 The goal is to make healthy habits more engaging and motivating.
 
@@ -108,7 +107,7 @@ Many existing health applications focus on individual measurements or fitness tr
 
 PulseGuard's goal is to combine multiple health factors into one overall picture of cardiovascular health.
 
-Instead of forcing users to interpret several disconnected measurements, PulseGuard aims to provide a simple way to understand trends and determine when professional medical attention may be appropriate.
+Instead of forcing users to interpret several disconnected measurements, PulseGuard aims to provide a simple way to understand trends and determine when professional medical attention may be appropriate using an AI assitant to ensure it goes well. 
 
 ---
 
@@ -145,7 +144,7 @@ Our initial development goal is to create the core application and begin impleme
 
 **3NJHDP**
 
-PulseGuard was created as part of the **RWC Summer 2026** project.
+PulseGuard was created as part of the **RWC Summer 2026** business project
 
 ---
 
