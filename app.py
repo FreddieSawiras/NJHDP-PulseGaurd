@@ -208,16 +208,10 @@ section[data-testid="stSidebar"] {{
     font-size:13px;
 }}
 
-/* Alert boxes (st.info/success/warning/error) keep their own tinted
-   background for contrast, so their text stays dark regardless of theme.
-   Multiple selector strategies are combined since Streamlit's internal
-   markup/class names can differ between versions. */
-.stAlert, .stAlert *,
-[class*="stAlert"], [class*="stAlert"] *,
-[data-testid*="Alert" i], [data-testid*="Alert" i] *,
-[data-testid*="Notification" i], [data-testid*="Notification" i] * {{
-    color:#1a1a1a !important;
-}}
+/* Alert boxes (st.info/success/warning/error) already inherit the
+   theme text color from the wildcard rule above, which is correct here
+   since Streamlit renders alert backgrounds dark-tinted in dark mode
+   and light-tinted in light mode. */
 
 @keyframes scorePop {{
     0%   {{ opacity: 0; transform: scale(0.85); }}
