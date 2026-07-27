@@ -98,6 +98,23 @@ else:
 
 GOOD, WARN, DANGER = "#2e7d32", "#f9a825", "#c62828"
 
+
+def hex_to_rgba(hex_color, alpha=0.2):
+    hex_color = hex_color.lstrip("#")
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def score_color(score):
+    if score >= 90:
+        return GOOD
+    elif score >= 75:
+        return WARN
+    else:
+        return DANGER
+
 # --------------------------------------------------
 # Global styling
 # --------------------------------------------------
@@ -266,13 +283,14 @@ def render_chips(items):
 
 
 def render_score_gauge(score):
+    bar_color = score_color(score)
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=score,
         number={'suffix': "/100", 'font': {'color': C['text']}},
         gauge={
             'axis': {'range': [0, 100], 'tickcolor': C['text']},
-            'bar': {'color': C['title']},
+            'bar': {'color': bar_color},
             'bgcolor': C['card_bg'],
             'steps': [
                 {'range': [0, 50], 'color': "#ffcdd2"},
@@ -307,7 +325,7 @@ def render_radar_chart(hr, rhr, hrv_v, bp, rec, sleep, steps_v):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=values, theta=categories, fill='toself',
-        line_color=C['title'], fillcolor=f"{C['title']}33"
+        line_color=C['title'], fillcolor=hex_to_rgba(C['title'], 0.25)
     ))
     fig.update_layout(
         polar=dict(
