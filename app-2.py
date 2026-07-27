@@ -129,14 +129,14 @@ if page == "🏠 Home":
     )
 
     st.markdown(
-        "<div class='subtitle'>Know Your Heart. Stay One Step Ahead.</div>",
+        "<div class='subtitle'>Simple Steps for a Stronger, Healthier Heart.</div>",
         unsafe_allow_html=True
     )
 
     st.write("")
 
     st.success(
-        "Welcome to PulseGuard! Connect your smartwatch and monitor "
+        "Welcome to PulseGuard. Track your symptoms, understand your heart health, and get guidance to help lower your risk of heart disease."
         "important heart-health information in one place."
     )
 
