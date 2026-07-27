@@ -196,6 +196,38 @@ st.markdown(f"""
     font-size:13px;
 }}
 
+/* --- Sidebar --- */
+section[data-testid="stSidebar"] {{
+    background-color:{C['card_bg']};
+}}
+section[data-testid="stSidebar"] * {{
+    color:{C['text']} !important;
+}}
+
+/* --- Catch native Streamlit text that our classes above don't reach --- */
+.stApp, .stApp p, .stApp span, .stApp li, .stApp label,
+.stMarkdown, .stCaption, [data-testid="stCaptionContainer"],
+[data-testid="stMetricValue"], [data-testid="stMetricLabel"],
+[data-testid="stMetricDelta"], .stRadio label, .stCheckbox label,
+.stSlider label, .stSelectbox label {{
+    color:{C['text']} !important;
+}}
+
+/* Alert boxes (st.info/success/warning/error) keep their own tinted
+   background for contrast, but force readable text on top of it */
+.stAlert p, .stAlert span, .stAlert div {{
+    color:#1a1a1a !important;
+}}
+
+@keyframes scorePop {{
+    0%   {{ opacity: 0; transform: scale(0.85); }}
+    100% {{ opacity: 1; transform: scale(1); }}
+}}
+
+.score-pop {{
+    animation: scorePop 0.4s ease-out;
+}}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -482,20 +514,15 @@ def generate_ai_insight(score, positives, concerns):
 
 
 def animate_score(final_score):
-    placeholder = st.empty()
-    frames = 10
-    for i in range(frames + 1):
-        val = int(final_score * i / frames)
-        placeholder.markdown(
-            f"""
-            <div class="metric-card" style="text-align:center;">
-                <div class="metric-title">❤️ Heart Health Score</div>
-                <div class="metric-value" style="font-size:44px;">{val}/100</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        time.sleep(0.025)
+    st.markdown(
+        f"""
+        <div class="metric-card score-pop" style="text-align:center;">
+            <div class="metric-title">❤️ Heart Health Score</div>
+            <div class="metric-value" style="font-size:44px;">{final_score}/100</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # --------------------------------------------------
