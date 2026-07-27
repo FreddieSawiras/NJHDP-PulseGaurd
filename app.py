@@ -116,6 +116,66 @@ steps = 6840
 watch_connected = True
 battery = 87
 last_sync = datetime.now().strftime("%I:%M %p")
+# --------------------------------------------------
+# Create a simple health summary based on today's data
+# --------------------------------------------------
+
+def generate_health_summary():
+
+    score = 100
+    positives = []
+    concerns = []
+
+    # Heart Rate
+    if 60 <= heart_rate <= 100:
+        positives.append("Your heart rate is within the expected resting range.")
+    else:
+        score -= 10
+        concerns.append("Your heart rate is outside the expected resting range.")
+
+    # Resting Heart Rate
+    if 50 <= resting_hr <= 80:
+        positives.append("Your resting heart rate looks healthy.")
+    else:
+        score -= 5
+        concerns.append("Your resting heart rate may be unusual.")
+
+    # HRV
+    if hrv >= 50:
+        positives.append("Your heart rate variability is strong.")
+    else:
+        score -= 8
+        concerns.append("Your heart rate variability is lower than normal.")
+
+    # Sleep
+    if sleep_quality >= 80:
+        positives.append("Excellent sleep quality.")
+    elif sleep_quality >= 60:
+        score -= 3
+        concerns.append("Your sleep quality could improve.")
+    else:
+        score -= 8
+        concerns.append("Poor sleep quality detected.")
+
+    # Steps
+    if steps >= 10000:
+        positives.append("You reached your daily activity goal.")
+    elif steps >= 7500:
+        positives.append("You stayed fairly active today.")
+    else:
+        score -= 7
+        concerns.append("Try increasing your daily activity.")
+
+    # Heart Rate Recovery
+    if heart_rate_recovery >= 20:
+        positives.append("Heart rate recovery looks healthy.")
+    else:
+        score -= 5
+        concerns.append("Heart rate recovery is slower than expected.")
+
+    score = max(score, 0)
+
+    return score, positives, concerns
 
 # --------------------------------------------------
 # HOME PAGE
@@ -447,11 +507,36 @@ elif page == "📈 Health Summary":
 
     st.markdown("---")
 
-    score = 92
+    score = score, positives, concerns = generate_health_summary()
+
+st.metric("❤️ Heart Health Score", f"{score}/100")
+st.progress(score / 100)
 
     st.metric("Overall Heart Health Score", f"{score}/100")
 
     st.progress(score/100)
+st.markdown("---")
+
+st.subheader("🧠 PulseGuard Health Insights")
+
+score, positives, concerns = generate_health_summary()
+
+if score >= 90:
+    st.success("Overall, your heart health data looks very good today.")
+elif score >= 75:
+    st.info("Your heart health looks good, but there are a few things to monitor.")
+else:
+    st.warning("Some measurements deserve extra attention. Continue monitoring your trends.")
+
+if positives:
+    st.write("### ✅ What's Going Well")
+    for item in positives:
+        st.write(f"• {item}")
+
+if concerns:
+    st.write("### ⚠ Areas to Watch")
+    for item in concerns:
+        st.write(f"• {item}")
 
     st.write("### Summary")
 
@@ -500,6 +585,36 @@ elif page == "📈 Health Summary":
     st.write("• Aim for 7–9 hours of sleep.")
     st.write("• Stay hydrated.")
     st.write("• Schedule regular checkups with your healthcare provider.")
+    st.markdown("---")
+
+st.subheader("🚨 Early Warning Detector")
+
+alerts = []
+
+if heart_rate > 100:
+    alerts.append("Elevated heart rate detected.")
+
+if hrv < 30:
+    alerts.append("Low heart rate variability detected.")
+
+if sleep_quality < 60:
+    alerts.append("Poor sleep quality may affect heart health.")
+
+if heart_rate_recovery < 15:
+    alerts.append("Slow heart rate recovery detected.")
+
+if len(alerts) == 0:
+    st.success("🟢 No unusual patterns were detected today.")
+else:
+    st.warning("PulseGuard noticed the following patterns:")
+
+    for alert in alerts:
+        st.write("• " + alert)
+
+st.caption(
+    "This feature is an educational prototype and does not provide a medical diagnosis. "
+    "If you have concerning symptoms, seek advice from a qualified healthcare professional."
+)
 
     st.markdown("---")
 
