@@ -1,4 +1,5 @@
 import streamlit as st
+import random
 from datetime import datetime
 
 # --------------------------------------------------
@@ -101,20 +102,55 @@ st.sidebar.markdown("---")
 st.sidebar.success("Sprint 1 Prototype")
 
 # --------------------------------------------------
-# Fake smartwatch data
-# (Later these values will come from a real smartwatch)
+# Simulated smartwatch data (Live Demo Controls)
+# No real smartwatch is connected yet, so these values
+# are driven by sliders in the sidebar instead of being
+# hardcoded. Drag them (or hit "Simulate New Reading")
+# to watch the Heart Health Score and insights update live.
 # --------------------------------------------------
 
-heart_rate = 72
-resting_hr = 61
-hrv = 55
-blood_pressure_variability = 5
-heart_rate_recovery = 27
-sleep_quality = 86
-steps = 6840
+_defaults = {
+    "heart_rate": 72,
+    "resting_hr": 61,
+    "hrv": 55,
+    "blood_pressure_variability": 5,
+    "heart_rate_recovery": 27,
+    "sleep_quality": 86,
+    "steps": 6840,
+    "battery": 87,
+}
+
+for _key, _val in _defaults.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _val
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎛️ Live Demo Controls")
+st.sidebar.caption(
+    "No real smartwatch is connected in this prototype. "
+    "Drag these sliders (or hit the button below) to simulate live readings."
+)
+
+if st.sidebar.button("🎲 Simulate New Reading"):
+    st.session_state.heart_rate = random.randint(55, 130)
+    st.session_state.resting_hr = random.randint(45, 90)
+    st.session_state.hrv = random.randint(15, 90)
+    st.session_state.blood_pressure_variability = random.randint(0, 20)
+    st.session_state.heart_rate_recovery = random.randint(5, 40)
+    st.session_state.sleep_quality = random.randint(30, 100)
+    st.session_state.steps = random.randint(500, 15000)
+    st.session_state.battery = random.randint(10, 100)
+
+heart_rate = st.sidebar.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
+resting_hr = st.sidebar.slider("💓 Resting Heart Rate (BPM)", 30, 130, key="resting_hr")
+hrv = st.sidebar.slider("📊 Heart Rate Variability (ms)", 0, 150, key="hrv")
+blood_pressure_variability = st.sidebar.slider("🩺 Blood Pressure Variability (mmHg)", 0, 40, key="blood_pressure_variability")
+heart_rate_recovery = st.sidebar.slider("🏃 Heart Rate Recovery (BPM)", 0, 60, key="heart_rate_recovery")
+sleep_quality = st.sidebar.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
+steps = st.sidebar.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
+battery = st.sidebar.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
 
 watch_connected = True
-battery = 87
 last_sync = datetime.now().strftime("%I:%M %p")
 # --------------------------------------------------
 # Create a simple health summary based on today's data
