@@ -1,6 +1,7 @@
 import streamlit as st
 import random
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # --------------------------------------------------
 # Set up the page
@@ -151,7 +152,7 @@ steps = st.sidebar.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
 battery = st.sidebar.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
 
 watch_connected = True
-last_sync = datetime.now().strftime("%I:%M %p")
+last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
 # --------------------------------------------------
 # Create a simple health summary based on today's data
 # --------------------------------------------------
