@@ -136,8 +136,8 @@ if page == "🏠 Home":
     st.write("")
 
     st.success(
-        "Welcome to PulseGuard. Track your symptoms, understand your heart health, and get guidance to help lower your risk of heart disease."
-        "important heart-health information in one place."
+        "Welcome to PulseGuard. Track your symptoms, understand your heart health, and get guidance to help lower your risk of heart disease.     "
+        "Important heart-health information in one place."
     )
 
     col1,col2=st.columns(2)
