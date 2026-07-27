@@ -5,7 +5,7 @@ from datetime import datetime
 # Set up the page
 # --------------------------------------------------
 st.set_page_config(
-    page_title="PulseGuard",
+    page_title="PULSE",
     page_icon="❤️",
     layout="wide"
 )
