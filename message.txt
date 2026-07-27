@@ -1,0 +1,396 @@
+```python
+import streamlit as st
+
+# ---------------------------------------------------------
+# Page setup
+# ---------------------------------------------------------
+st.set_page_config(
+    page_title="PulseGuard",
+    page_icon="❤️",
+    layout="wide"
+)
+
+# ---------------------------------------------------------
+# Custom styling
+# ---------------------------------------------------------
+st.markdown("""
+<style>
+    /* Main page spacing */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1200px;
+    }
+
+    /* Main title */
+    .main-title {
+        font-size: 44px;
+        font-weight: 750;
+        color: #c62828;
+        margin-bottom: 2px;
+        letter-spacing: -1px;
+    }
+
+    /* Subtitle */
+    .subtitle {
+        color: #666666;
+        font-size: 18px;
+        margin-top: 0;
+        margin-bottom: 20px;
+    }
+
+    /* Metric cards */
+    .metric-card {
+        padding: 18px 16px;
+        border-radius: 14px;
+        border: 1px solid #e5e5e5;
+        background-color: #ffffff;
+        text-align: center;
+        margin-bottom: 14px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+
+    .metric-name {
+        font-size: 15px;
+        color: #666666;
+        margin-bottom: 6px;
+    }
+
+    .metric-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #1b5e20;
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        border-right: 1px solid #eeeeee;
+    }
+
+    /* Small helper text */
+    .helper-text {
+        color: #666666;
+        font-size: 14px;
+    }
+
+    /* Section spacing */
+    .section-space {
+        margin-top: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------
+# Header
+# ---------------------------------------------------------
+st.markdown(
+    '<div class="main-title">❤️ PulseGuard</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="subtitle">Simple heart-health monitoring for everyday prevention.</div>',
+    unsafe_allow_html=True
+)
+
+st.info(
+    "Sprint 1 prototype: This screen shows heart-health data in an easy-to-read format. "
+    "A real smartwatch connection will provide the live values after the appropriate device "
+    "integration is added."
+)
+
+
+# ---------------------------------------------------------
+# Sidebar navigation
+# ---------------------------------------------------------
+with st.sidebar:
+    st.markdown("## ❤️ PulseGuard")
+    st.caption("Prototype navigation")
+
+    page = st.radio(
+        "Go to",
+        ["Heart Dashboard", "Accuracy Tips", "About PulseGuard"]
+    )
+
+
+# =========================================================
+# HEART DASHBOARD
+# =========================================================
+if page == "Heart Dashboard":
+
+    st.header("❤️ Heart Health Dashboard")
+
+    st.subheader("⌚ Connected Watch Data")
+
+    st.markdown(
+        '<div class="helper-text">'
+        "Enter sample values below to test the dashboard. "
+        "These values are not a medical diagnosis."
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+
+    # -----------------------------------------------------
+    # Input values
+    # -----------------------------------------------------
+    input_col1, input_col2, input_col3 = st.columns(3)
+
+    with input_col1:
+        heart_rate = st.number_input(
+            "Heart Rate (BPM)",
+            min_value=0,
+            max_value=250,
+            value=72
+        )
+
+        resting_rate = st.number_input(
+            "Resting Heart Rate (BPM)",
+            min_value=0,
+            max_value=200,
+            value=62
+        )
+
+        hrv = st.number_input(
+            "Heart Rate Variability (ms)",
+            min_value=0,
+            max_value=500,
+            value=55
+        )
+
+    with input_col2:
+        bp_variability = st.number_input(
+            "Blood Pressure Variability (mmHg)",
+            min_value=0,
+            max_value=100,
+            value=5
+        )
+
+        recovery = st.number_input(
+            "Heart Rate Recovery (BPM)",
+            min_value=0,
+            max_value=100,
+            value=25
+        )
+
+        sleep = st.number_input(
+            "Sleep Quality (%)",
+            min_value=0,
+            max_value=100,
+            value=85
+        )
+
+    with input_col3:
+        steps = st.number_input(
+            "Daily Steps",
+            min_value=0,
+            max_value=100000,
+            value=6500
+        )
+
+        st.caption(
+            "Tip: In the future, these values can be replaced by "
+            "data from a supported smartwatch integration."
+        )
+
+    # -----------------------------------------------------
+    # Today's metrics
+    # -----------------------------------------------------
+    st.divider()
+
+    st.subheader("📊 Today's Metrics")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">Heart Rate</div>
+                <div class="metric-value">{heart_rate} BPM</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">Resting Heart Rate</div>
+                <div class="metric-value">{resting_rate} BPM</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">HRV</div>
+                <div class="metric-value">{hrv} ms</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with col2:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">Blood Pressure Variability</div>
+                <div class="metric-value">{bp_variability} mmHg</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">Heart Rate Recovery</div>
+                <div class="metric-value">{recovery} BPM</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with col3:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">Sleep Quality</div>
+                <div class="metric-value">{sleep}%</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-name">Daily Steps</div>
+                <div class="metric-value">{steps:,}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # -----------------------------------------------------
+    # Data status
+    # -----------------------------------------------------
+    st.divider()
+
+    st.subheader("🔎 Data Status")
+
+    if heart_rate == 0:
+        st.warning("No heart-rate data has been entered.")
+    else:
+        st.success("Heart-health data is available for this prototype.")
+
+    st.caption(
+        "Important: PulseGuard is a monitoring prototype, not a medical device or "
+        "diagnosis tool. If someone has concerning or emergency symptoms, they should "
+        "seek appropriate medical care."
+    )
+
+
+# =========================================================
+# ACCURACY TIPS
+# =========================================================
+elif page == "Accuracy Tips":
+
+    st.header("⌚ Accuracy Tips")
+
+    st.write(
+        "Use these simple tips to help get more reliable smartwatch readings:"
+    )
+
+    tips_col1, tips_col2 = st.columns(2)
+
+    with tips_col1:
+        st.markdown("""
+        **⌚ Watch setup**
+        
+        - Wear the watch securely and according to the manufacturer's instructions.
+        - Keep the watch sensor clean.
+        - Make sure the watch has enough battery.
+        - Keep the watch positioned consistently on your wrist.
+        """)
+
+    with tips_col2:
+        st.markdown("""
+        **📈 Reading the data**
+        
+        - Avoid entering estimated values when actual measurements are available.
+        - Give the watch enough time to collect data before judging a trend.
+        - Look at trends over time instead of relying on one measurement.
+        - Remember that smartwatch measurements can have limitations and may not replace clinical testing.
+        """)
+
+    st.warning(
+        "Do not use PulseGuard as the only way to decide whether a medical emergency is happening."
+    )
+
+
+# =========================================================
+# ABOUT PULSEGUARD
+# =========================================================
+elif page == "About PulseGuard":
+
+    st.header("❤️ About PulseGuard")
+
+    st.write(
+        "PulseGuard is being developed by New Jersey Heart Disease Prevention (NJHDP) "
+        "to make preventive heart-health monitoring easier and more accessible."
+    )
+
+    st.divider()
+
+    st.subheader("🎯 Sprint 1 Goal")
+
+    st.write(
+        "Create a simple interface that can display important cardiovascular and activity "
+        "metrics from a smartwatch."
+    )
+
+    st.subheader("📊 Sprint 1 Metrics")
+
+    metric_col1, metric_col2 = st.columns(2)
+
+    with metric_col1:
+        st.markdown("""
+        - ❤️ Heart rate
+        - ❤️ Resting heart rate
+        - 📊 Heart-rate variability (HRV)
+        - 🩺 Blood-pressure variability
+        """)
+
+    with metric_col2:
+        st.markdown("""
+        - 🏃 Heart-rate recovery
+        - 😴 Sleep quality
+        - 👟 Daily step count
+        """)
+
+    st.divider()
+
+    st.subheader("🚀 Next Development Step")
+
+    st.write(
+        "The next step is replacing the prototype input boxes with a real smartwatch data "
+        "connection. Streamlit by itself cannot directly connect to Apple Watch, Fitbit, "
+        "or Garmin hardware, so that part will require the appropriate platform/API integration."
+    )
+```
+
+### `requirements.txt`
+
+You **do not need to add anything new**. Your existing requirements can stay as they are:
+
+```txt
+streamlit
+```
+
+The main improvement is that the dashboard now has a clearer visual hierarchy: **header → inputs → metrics → status**, while still doing exactly what your original app does.
