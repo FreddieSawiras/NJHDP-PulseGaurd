@@ -2,10 +2,13 @@ import streamlit as st
 import streamlit.components.v1 as components
 import random
 import time
+import io
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from fpdf import FPDF
+from PIL import Image, ImageDraw, ImageFont
 
 # --------------------------------------------------
 # Set up the page
@@ -52,6 +55,37 @@ if "trend_data" not in st.session_state:
         "sleep_quality": [random.randint(70, 95) for _ in range(6)],
         "steps": [random.randint(4000, 9000) for _ in range(6)],
     }
+
+if "full_history" not in st.session_state:
+    _history = {}
+    for _i in range(14, 0, -1):
+        _d = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=_i)).strftime("%Y-%m-%d")
+        _history[_d] = {
+            "heart_rate": random.randint(60, 105),
+            "resting_hr": random.randint(50, 85),
+            "hrv": random.randint(25, 85),
+            "blood_pressure_variability": random.randint(1, 18),
+            "heart_rate_recovery": random.randint(10, 38),
+            "sleep_quality": random.randint(45, 98),
+            "steps": random.randint(2000, 13000),
+        }
+    st.session_state.full_history = _history
+
+TIPS = [
+    "💧 Staying hydrated helps regulate heart rate and blood pressure.",
+    "😴 7-9 hours of consistent sleep supports a healthy heart rhythm.",
+    "🚶 Even a 10-minute walk can improve circulation.",
+    "🧂 Reducing sodium intake can help manage blood pressure over time.",
+    "🧘 A few minutes of deep breathing can lower stress-related heart strain.",
+    "🚭 Avoiding tobacco significantly reduces cardiovascular risk.",
+    "🥗 A diet rich in fruits and vegetables supports long-term heart health.",
+    "📅 Regular checkups help catch early warning signs.",
+    "🏋️ Strength training a couple times a week supports cardiovascular fitness too.",
+    "☕ Moderating caffeine can help reduce heart rate spikes for some people.",
+]
+
+if "tip_index" not in st.session_state:
+    st.session_state.tip_index = datetime.now(ZoneInfo("America/New_York")).timetuple().tm_yday % len(TIPS)
 
 # --------------------------------------------------
 # Preset "auto-play" demo scenarios
@@ -428,13 +462,14 @@ def render_ecg_animation(hr):
     components.html(html_code, height=180)
 
 
-def generate_health_summary():
-    heart_rate = st.session_state.heart_rate
-    resting_hr = st.session_state.resting_hr
-    hrv = st.session_state.hrv
-    sleep_quality = st.session_state.sleep_quality
-    steps = st.session_state.steps
-    heart_rate_recovery = st.session_state.heart_rate_recovery
+def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
+                             sleep_quality=None, steps=None, heart_rate_recovery=None):
+    heart_rate = st.session_state.heart_rate if heart_rate is None else heart_rate
+    resting_hr = st.session_state.resting_hr if resting_hr is None else resting_hr
+    hrv = st.session_state.hrv if hrv is None else hrv
+    sleep_quality = st.session_state.sleep_quality if sleep_quality is None else sleep_quality
+    steps = st.session_state.steps if steps is None else steps
+    heart_rate_recovery = st.session_state.heart_rate_recovery if heart_rate_recovery is None else heart_rate_recovery
 
     score = 100
     positives = []
@@ -507,6 +542,203 @@ def generate_ai_insight(score, positives, concerns):
     return "Based on today's readings, " + tone + body + closing
 
 
+def compute_streak(today_score):
+    """Count consecutive 'healthy' days (score >= 75) ending today, walking backward through history."""
+    streak = 1 if today_score >= 75 else 0
+    if streak == 0:
+        return 0
+    dates_sorted = sorted(st.session_state.full_history.keys(), reverse=True)
+    for d in dates_sorted:
+        day = st.session_state.full_history[d]
+        day_score, _, _ = generate_health_summary(
+            heart_rate=day["heart_rate"], resting_hr=day["resting_hr"], hrv=day["hrv"],
+            sleep_quality=day["sleep_quality"], steps=day["steps"],
+            heart_rate_recovery=day["heart_rate_recovery"]
+        )
+        if day_score >= 75:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _pdf_safe(text):
+    """fpdf2 core fonts only support latin-1; strip anything outside that (emoji, etc.)."""
+    return text.encode("latin-1", "ignore").decode("latin-1")
+
+
+def ai_chat_response(question, score, positives, concerns, hr, rhr, hrv_v, sleep_q, steps_v, rec):
+    q = question.lower()
+
+    if "score" in q:
+        extra = concerns[0] if concerns else "All your key metrics are within healthy ranges today."
+        return f"Your current Heart Health Score is {score}/100. {extra}"
+    if "sleep" in q:
+        note = "That's excellent." if sleep_q >= 80 else "Try aiming for 7-9 hours of consistent sleep to improve this."
+        return f"Your sleep quality today is {sleep_q}%. {note}"
+    if "hrv" in q or "variability" in q:
+        note = "That's a strong reading." if hrv_v >= 50 else "Lower HRV can be linked to stress or incomplete recovery — consider prioritizing rest."
+        return f"Your heart rate variability is {hrv_v} ms. {note}"
+    if "recover" in q:
+        note = "That's a healthy recovery rate." if rec >= 20 else "Recovery is a bit slower than typical — regular cardio can help improve this over time."
+        return f"Your heart rate recovery is {rec} BPM. {note}"
+    if "step" in q or "activity" in q or "exercise" in q or "walk" in q:
+        note = "Great job staying active today!" if steps_v >= 7500 else "Try to work in more movement throughout the day."
+        return f"You've logged {steps_v:,} steps today. {note}"
+    if "heart rate" in q or " hr " in f" {q} " or q.strip() in ("hr", "bpm"):
+        note = "Both are within a typical healthy range." if (60 <= hr <= 100 and 50 <= rhr <= 80) else "One of these is outside the typical range — worth keeping an eye on."
+        return f"Your heart rate is {hr} BPM and resting heart rate is {rhr} BPM. {note}"
+    if "why" in q and ("low" in q or "bad" in q or "concern" in q or "wrong" in q):
+        if concerns:
+            return "Based on today's readings, here's what stands out: " + " ".join(concerns)
+        return "Nothing concerning stands out in today's readings — your metrics all look healthy!"
+    if "good" in q or "well" in q or "great" in q:
+        if positives:
+            return "Here's what's going well today: " + " ".join(positives)
+        return "No standout positives flagged yet today — keep monitoring your trends."
+    if "hi" in q or "hello" in q or "hey" in q:
+        return "Hi! I'm the PulseGuard demo assistant. Ask me about your heart rate, sleep, HRV, steps, recovery, or overall score."
+
+    return (
+        "I can answer questions about your heart rate, sleep, HRV, steps, recovery, or overall score. "
+        "Try asking something like 'why is my score low today?' or 'how's my sleep?'"
+    )
+
+
+def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
+                         bp, recovery, sleep_quality, steps, battery, last_sync, watch_name):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 22)
+    pdf.set_text_color(198, 40, 40)
+    pdf.cell(0, 12, _pdf_safe("PulseGuard Health Report"), ln=True)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(90, 90, 90)
+    pdf.cell(0, 6, _pdf_safe(f"Generated {last_sync} ET  |  Device: {watch_name}"), ln=True)
+    pdf.ln(4)
+
+    if score >= 90:
+        score_rgb = (46, 125, 50)
+    elif score >= 75:
+        score_rgb = (249, 168, 37)
+    else:
+        score_rgb = (198, 40, 40)
+
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_text_color(*score_rgb)
+    pdf.cell(0, 10, _pdf_safe(f"Heart Health Score: {score}/100"), ln=True)
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 8, "Today's Metrics", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+
+    rows = [
+        ("Heart Rate", f"{heart_rate} BPM"),
+        ("Resting Heart Rate", f"{resting_hr} BPM"),
+        ("Heart Rate Variability", f"{hrv} ms"),
+        ("Blood Pressure Variability", f"{bp} mmHg"),
+        ("Heart Rate Recovery", f"{recovery} BPM"),
+        ("Sleep Quality", f"{sleep_quality}%"),
+        ("Daily Steps", f"{steps:,}"),
+        ("Watch Battery", f"{battery}%"),
+    ]
+    for label, value in rows:
+        pdf.set_fill_color(245, 245, 245)
+        pdf.cell(90, 8, _pdf_safe(label), border=0, fill=True)
+        pdf.cell(0, 8, _pdf_safe(value), border=0, fill=True, ln=True)
+
+    pdf.ln(4)
+
+    if positives:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(46, 125, 50)
+        pdf.cell(0, 8, "What's Going Well", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(20, 20, 20)
+        for p in positives:
+            pdf.multi_cell(0, 6, _pdf_safe(f"- {p}"))
+        pdf.ln(2)
+
+    if concerns:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(198, 40, 40)
+        pdf.cell(0, 8, "Areas to Watch", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(20, 20, 20)
+        for c in concerns:
+            pdf.multi_cell(0, 6, _pdf_safe(f"- {c}"))
+        pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 8, "AI-Generated Insight", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.multi_cell(0, 6, _pdf_safe(ai_insight))
+    pdf.ln(4)
+
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.multi_cell(0, 5, _pdf_safe(
+        "This report is generated by an educational prototype and is not a medical diagnosis. "
+        "It is not intended to replace professional medical advice. Consult a qualified "
+        "healthcare provider regarding any concerns."
+    ))
+
+    return bytes(pdf.output())
+
+
+def generate_share_card(score, heart_rate, sleep_quality, steps, watch_name):
+    W, H = 1080, 1920
+    if score >= 90:
+        accent = (46, 125, 50)
+    elif score >= 75:
+        accent = (249, 168, 37)
+    else:
+        accent = (198, 40, 40)
+
+    img = Image.new("RGB", (W, H), (18, 18, 22))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, W, 420], fill=accent)
+
+    try:
+        f_brand = ImageFont.load_default(size=56)
+        f_giant = ImageFont.load_default(size=240)
+        f_label = ImageFont.load_default(size=46)
+        f_small = ImageFont.load_default(size=34)
+    except TypeError:
+        f_brand = f_giant = f_label = f_small = ImageFont.load_default()
+
+    draw.text((60, 60), "PulseGuard", font=f_brand, fill=(255, 255, 255))
+    draw.text((60, 160), "Daily Heart Health Summary", font=f_small, fill=(255, 255, 255))
+
+    draw.text((60, 520), "Heart Health Score", font=f_label, fill=(190, 190, 190))
+    draw.text((60, 590), f"{score}", font=f_giant, fill=accent)
+    draw.text((60, 900), "/ 100", font=f_label, fill=(140, 140, 140))
+
+    rows = [
+        ("Heart Rate", f"{heart_rate} BPM"),
+        ("Sleep Quality", f"{sleep_quality}%"),
+        ("Daily Steps", f"{steps:,}"),
+        ("Device", watch_name),
+    ]
+    y = 1050
+    for label, value in rows:
+        draw.text((60, y), label, font=f_small, fill=(160, 160, 160))
+        draw.text((60, y + 45), value, font=f_label, fill=(255, 255, 255))
+        y += 140
+
+    draw.text((60, H - 100), "Generated with PulseGuard (prototype)", font=f_small, fill=(110, 110, 110))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def animate_score(final_score):
     st.markdown(
         f"""
@@ -532,6 +764,7 @@ page = st.sidebar.radio(
         "❤️ Heart Dashboard",
         "⌚ Smartwatch",
         "📈 Health Summary",
+        "🤖 Ask PulseGuard",
         "💡 Accuracy Tips",
         "ℹ️ About"
     ]
@@ -549,11 +782,12 @@ st.session_state.selected_watch = st.sidebar.selectbox(
     index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
 )
 _watch_color = WATCH_OPTIONS[st.session_state.selected_watch]
+watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
 st.sidebar.markdown(
     f"""
     <div class="device-card" style="border-top:5px solid {_watch_color};">
         <div style="font-size:36px;">{st.session_state.selected_watch.split(" ")[0]}</div>
-        <div style="font-weight:700;">{" ".join(st.session_state.selected_watch.split(" ")[1:])}</div>
+        <div style="font-weight:700;">{watch_plain_name}</div>
         <div style="font-size:12px;color:{C['subtitle']} !important;">Connected since {st.session_state.connected_since}</div>
     </div>
     """,
@@ -576,6 +810,7 @@ if st.sidebar.button("🎲 Simulate New Reading"):
     st.session_state.sleep_quality = random.randint(30, 100)
     st.session_state.steps = random.randint(500, 15000)
     st.session_state.battery = random.randint(10, 100)
+    st.session_state.tip_index = random.randint(0, len(TIPS) - 1)
 
 st.session_state.autoplay = st.sidebar.checkbox(
     "▶️ Auto-Play Demo (cycles scenarios every few seconds)",
@@ -616,6 +851,17 @@ if page == "🏠 Home":
         "Welcome to PulseGuard. Track your symptoms, understand your heart health, and get guidance to help lower your risk of heart disease.     "
         "Important heart-health information in one place."
     )
+
+    tip_col, streak_col = st.columns([2, 1])
+    with tip_col:
+        st.info(f"**Tip of the Day:** {TIPS[st.session_state.tip_index]}")
+    with streak_col:
+        _today_score, _, _ = generate_health_summary()
+        _streak = compute_streak(_today_score)
+        if _streak > 0:
+            st.warning(f"🔥 **{_streak}-day streak** of good heart health!")
+        else:
+            st.info("No active streak yet — a score of 75+ starts one!")
 
     col1, col2 = st.columns(2)
 
@@ -832,6 +1078,19 @@ elif page == "📈 Health Summary":
 
     score, positives, concerns = generate_health_summary()
 
+    _prev_score = st.session_state.get("_prev_score", score)
+    _prev_steps_goal = st.session_state.get("_prev_steps_goal_hit", steps >= 10000)
+    if score >= 90 and _prev_score < 90:
+        st.balloons()
+    if steps >= 10000 and not _prev_steps_goal:
+        st.balloons()
+    st.session_state._prev_score = score
+    st.session_state._prev_steps_goal_hit = steps >= 10000
+
+    _streak = compute_streak(score)
+    if _streak > 0:
+        st.markdown(f"🔥 **{_streak}-day streak** of good heart health!")
+
     gauge_col, anim_col = st.columns([1, 1])
     with gauge_col:
         render_score_gauge(score)
@@ -933,6 +1192,40 @@ elif page == "📈 Health Summary":
     )
 
     st.markdown("---")
+    st.subheader("📅 Browse Past Days")
+    st.caption("Sample simulated history — pick a date to see how that day's readings would have scored.")
+
+    _hist_dates = sorted(st.session_state.full_history.keys())
+    _date_labels = ["Today (live)"] + [
+        datetime.strptime(d, "%Y-%m-%d").strftime("%B %d, %Y") for d in _hist_dates
+    ]
+    _selected_label = st.selectbox("Select a date", _date_labels)
+
+    if _selected_label == "Today (live)":
+        st.info(f"Today's Heart Health Score: **{score}/100**")
+    else:
+        _sel_date = _hist_dates[_date_labels.index(_selected_label) - 1]
+        _day = st.session_state.full_history[_sel_date]
+        _day_score, _day_positives, _day_concerns = generate_health_summary(
+            heart_rate=_day["heart_rate"], resting_hr=_day["resting_hr"], hrv=_day["hrv"],
+            sleep_quality=_day["sleep_quality"], steps=_day["steps"],
+            heart_rate_recovery=_day["heart_rate_recovery"]
+        )
+        dcol1, dcol2, dcol3, dcol4 = st.columns(4)
+        with dcol1:
+            st.metric("Score", f"{_day_score}/100")
+        with dcol2:
+            st.metric("Heart Rate", f"{_day['heart_rate']} BPM")
+        with dcol3:
+            st.metric("Sleep", f"{_day['sleep_quality']}%")
+        with dcol4:
+            st.metric("Steps", f"{_day['steps']:,}")
+        if _day_concerns:
+            render_chips([(c, DANGER) for c in _day_concerns])
+        else:
+            st.caption("No concerns flagged for this simulated day.")
+
+    st.markdown("---")
 
     report_text = f"""PulseGuard Daily Report
 
@@ -949,19 +1242,65 @@ AI Insight Summary:
 {ai_insight}
 """
 
-    st.download_button(
-        "📄 Download Doctor Report",
-        data=report_text,
-        file_name="PulseGuard_Report.txt"
+    pdf_bytes = generate_pdf_report(
+        score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
+        blood_pressure_variability, heart_rate_recovery, sleep_quality, steps,
+        battery, last_sync, watch_plain_name
     )
+    share_card_bytes = generate_share_card(score, heart_rate, sleep_quality, steps, watch_plain_name)
+
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            "📄 Download Doctor Report (PDF)",
+            data=pdf_bytes,
+            file_name="PulseGuard_Report.pdf",
+            mime="application/pdf"
+        )
+    with dl_col2:
+        st.download_button(
+            "📸 Download Shareable Summary Card",
+            data=share_card_bytes,
+            file_name="PulseGuard_Summary.png",
+            mime="image/png"
+        )
 
     st.caption(
         "This report is for educational purposes and is not intended to replace professional medical advice."
     )
 
 # =====================================================
-# ACCURACY TIPS PAGE
+# AI CHAT ASSISTANT PAGE
 # =====================================================
+elif page == "🤖 Ask PulseGuard":
+
+    st.title("🤖 Ask PulseGuard")
+    st.caption(
+        "This is a simulated, rule-based demo assistant — it reads your current sidebar values "
+        "and answers with simple templated logic. It is not a real AI model and not medical advice."
+    )
+    st.markdown("---")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = [
+            ("assistant", "Hi! Ask me about your heart rate, sleep, HRV, steps, recovery, or overall score.")
+        ]
+
+    for role, content in st.session_state.chat_history:
+        with st.chat_message(role):
+            st.write(content)
+
+    user_question = st.chat_input("Ask about your heart health...")
+    if user_question:
+        st.session_state.chat_history.append(("user", user_question))
+        _score, _positives, _concerns = generate_health_summary()
+        response = ai_chat_response(
+            user_question, _score, _positives, _concerns,
+            heart_rate, resting_hr, hrv, sleep_quality, steps, heart_rate_recovery
+        )
+        st.session_state.chat_history.append(("assistant", response))
+        st.rerun()
+
 elif page == "💡 Accuracy Tips":
 
     st.title("💡 Accuracy Tips")
