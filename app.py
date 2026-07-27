@@ -121,19 +121,27 @@ def score_color(score):
 st.markdown(f"""
 <style>
 
+.stApp, .stApp *,
+section[data-testid="stSidebar"], section[data-testid="stSidebar"] * {{
+    color:{C['text']} !important;
+}}
+
 .stApp {{
     background-color:{C['bg']};
-    color:{C['text']};
+}}
+
+section[data-testid="stSidebar"] {{
+    background-color:{C['card_bg']} !important;
 }}
 
 .main-title{{
     font-size:46px;
     font-weight:bold;
-    color:{C['title']};
+    color:{C['title']} !important;
 }}
 
 .subtitle{{
-    color:{C['subtitle']};
+    color:{C['subtitle']} !important;
     font-size:20px;
 }}
 
@@ -153,13 +161,13 @@ st.markdown(f"""
 
 .metric-title{{
     font-size:17px;
-    color:{C['subtitle']};
+    color:{C['subtitle']} !important;
 }}
 
 .metric-value{{
     font-size:34px;
     font-weight:bold;
-    color:{C['text']};
+    color:{C['text']} !important;
 }}
 
 .chip{{
@@ -190,32 +198,19 @@ st.markdown(f"""
     box-shadow:0px 2px 6px rgba(0,0,0,.10);
 }}
 
+.device-card small, .device-sub {{
+    color:{C['subtitle']} !important;
+}}
+
 .footer{{
     text-align:center;
-    color:{C['subtitle']};
+    color:{C['subtitle']} !important;
     font-size:13px;
 }}
 
-/* --- Sidebar --- */
-section[data-testid="stSidebar"] {{
-    background-color:{C['card_bg']};
-}}
-section[data-testid="stSidebar"] * {{
-    color:{C['text']} !important;
-}}
-
-/* --- Catch native Streamlit text that our classes above don't reach --- */
-.stApp, .stApp p, .stApp span, .stApp li, .stApp label,
-.stMarkdown, .stCaption, [data-testid="stCaptionContainer"],
-[data-testid="stMetricValue"], [data-testid="stMetricLabel"],
-[data-testid="stMetricDelta"], .stRadio label, .stCheckbox label,
-.stSlider label, .stSelectbox label {{
-    color:{C['text']} !important;
-}}
-
 /* Alert boxes (st.info/success/warning/error) keep their own tinted
-   background for contrast, but force readable text on top of it */
-.stAlert p, .stAlert span, .stAlert div {{
+   background for contrast, so their text stays dark regardless of theme */
+.stAlert, .stAlert p, .stAlert span, .stAlert div, .stAlert li {{
     color:#1a1a1a !important;
 }}
 
@@ -308,7 +303,7 @@ def render_chips(items):
     for text, color in items:
         html += (
             f'<span class="chip" style="background:{color}{C["chip_bg_alpha"]};'
-            f'color:{color};border:1px solid {color};">{text}</span>'
+            f'color:{color} !important;border:1px solid {color};">{text}</span>'
         )
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
@@ -545,7 +540,7 @@ page = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.success("Sprint 1 Prototype")
-st.session_state.dark_mode = st.sidebar.toggle("🌙 Dark Mode", value=st.session_state.dark_mode)
+st.sidebar.toggle("🌙 Dark Mode", key="dark_mode")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⌚ Choose Your Device")
@@ -560,7 +555,7 @@ st.sidebar.markdown(
     <div class="device-card" style="border-top:5px solid {_watch_color};">
         <div style="font-size:36px;">{st.session_state.selected_watch.split(" ")[0]}</div>
         <div style="font-weight:700;">{" ".join(st.session_state.selected_watch.split(" ")[1:])}</div>
-        <div style="font-size:12px;color:{C['subtitle']};">Connected since {st.session_state.connected_since}</div>
+        <div style="font-size:12px;color:{C['subtitle']} !important;">Connected since {st.session_state.connected_since}</div>
     </div>
     """,
     unsafe_allow_html=True
