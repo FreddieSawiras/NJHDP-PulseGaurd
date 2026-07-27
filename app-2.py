@@ -79,7 +79,7 @@ st.markdown("""
 # Sidebar Navigation
 # --------------------------------------------------
 st.sidebar.image(
-    "https://imgur.com/a/QTA0Vss",
+    "https://plain-enam-prod-public.komododecks.com/202607/27/NmrdRZ3owACLL76Rk4lS/image.jpg",
     width=80
 )
 
