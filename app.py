@@ -507,36 +507,33 @@ elif page == "📈 Health Summary":
 
     st.markdown("---")
 
-    score = score, positives, concerns = generate_health_summary()
+    score, positives, concerns = generate_health_summary()
 
-st.metric("❤️ Heart Health Score", f"{score}/100")
-st.progress(score / 100)
+    st.metric("❤️ Heart Health Score", f"{score}/100")
+    st.progress(score / 100)
 
-    st.metric("Overall Heart Health Score", f"{score}/100")
+    st.markdown("---")
 
-    st.progress(score/100)
-st.markdown("---")
+    st.subheader("🧠 PulseGuard Health Insights")
 
-st.subheader("🧠 PulseGuard Health Insights")
+    if score >= 90:
+        st.success("Overall, your heart health data looks very good today.")
+    elif score >= 75:
+        st.info("Your heart health looks good, but there are a few things to monitor.")
+    else:
+        st.warning("Some measurements deserve extra attention. Continue monitoring your trends.")
 
-score, positives, concerns = generate_health_summary()
+    if positives:
+        st.write("### ✅ What's Going Well")
+        for item in positives:
+            st.write(f"• {item}")
 
-if score >= 90:
-    st.success("Overall, your heart health data looks very good today.")
-elif score >= 75:
-    st.info("Your heart health looks good, but there are a few things to monitor.")
-else:
-    st.warning("Some measurements deserve extra attention. Continue monitoring your trends.")
+    if concerns:
+        st.write("### ⚠ Areas to Watch")
+        for item in concerns:
+            st.write(f"• {item}")
 
-if positives:
-    st.write("### ✅ What's Going Well")
-    for item in positives:
-        st.write(f"• {item}")
-
-if concerns:
-    st.write("### ⚠ Areas to Watch")
-    for item in concerns:
-        st.write(f"• {item}")
+    st.markdown("---")
 
     st.write("### Summary")
 
@@ -587,34 +584,34 @@ if concerns:
     st.write("• Schedule regular checkups with your healthcare provider.")
     st.markdown("---")
 
-st.subheader("🚨 Early Warning Detector")
+    st.subheader("🚨 Early Warning Detector")
 
-alerts = []
+    alerts = []
 
-if heart_rate > 100:
-    alerts.append("Elevated heart rate detected.")
+    if heart_rate > 100:
+        alerts.append("Elevated heart rate detected.")
 
-if hrv < 30:
-    alerts.append("Low heart rate variability detected.")
+    if hrv < 30:
+        alerts.append("Low heart rate variability detected.")
 
-if sleep_quality < 60:
-    alerts.append("Poor sleep quality may affect heart health.")
+    if sleep_quality < 60:
+        alerts.append("Poor sleep quality may affect heart health.")
 
-if heart_rate_recovery < 15:
-    alerts.append("Slow heart rate recovery detected.")
+    if heart_rate_recovery < 15:
+        alerts.append("Slow heart rate recovery detected.")
 
-if len(alerts) == 0:
-    st.success("🟢 No unusual patterns were detected today.")
-else:
-    st.warning("PulseGuard noticed the following patterns:")
+    if len(alerts) == 0:
+        st.success("🟢 No unusual patterns were detected today.")
+    else:
+        st.warning("PulseGuard noticed the following patterns:")
 
-    for alert in alerts:
-        st.write("• " + alert)
+        for alert in alerts:
+            st.write("• " + alert)
 
-st.caption(
-    "This feature is an educational prototype and does not provide a medical diagnosis. "
-    "If you have concerning symptoms, seek advice from a qualified healthcare professional."
-)
+    st.caption(
+        "This feature is an educational prototype and does not provide a medical diagnosis. "
+        "If you have concerning symptoms, seek advice from a qualified healthcare professional."
+    )
 
     st.markdown("---")
 
