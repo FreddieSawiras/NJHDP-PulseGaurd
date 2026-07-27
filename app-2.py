@@ -79,7 +79,7 @@ st.markdown("""
 # Sidebar Navigation
 # --------------------------------------------------
 st.sidebar.image(
-    "https://img.icons8.com/fluency/96/heart-with-pulse.png",
+    "https://imgur.com/a/QTA0Vss",
     width=80
 )
 
