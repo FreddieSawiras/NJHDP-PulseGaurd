@@ -110,10 +110,10 @@ SCENARIOS = [
 
 WATCH_OPTIONS = {
     "⌚ Apple Watch": "#1d1d1f",
-    "🟦 Samsung Galaxy Watch": "#6a1b9a",
-    "🟢 Google Pixel Watch": "#1a73e8",
-    "🏃 Garmin": "#0077c8",
-    "🎽 Fitbit": "#00b0b9",
+    "⌚ Samsung Galaxy Watch": "#6a1b9a",
+    "⌚ Google Pixel Watch": "#1a73e8",
+    "⌚ Garmin": "#0077c8",
+    "⌚ Fitbit": "#00b0b9",
 }
 
 # --------------------------------------------------
@@ -142,9 +142,9 @@ def hex_to_rgba(hex_color, alpha=0.2):
 
 
 def score_color(score):
-    if score >= 90:
+    if score >= 75:
         return GOOD
-    elif score >= 75:
+    elif score >= 50:
         return WARN
     else:
         return DANGER
@@ -246,6 +246,38 @@ section[data-testid="stSidebar"] {{
    theme text color from the wildcard rule above, which is correct here
    since Streamlit renders alert backgrounds dark-tinted in dark mode
    and light-tinted in light mode. */
+
+/* --- Buttons (sidebar + everywhere) --- */
+.stButton > button, .stDownloadButton > button {{
+    border-radius: 10px !important;
+    border: 1.5px solid {C['title']} !important;
+    background-color: transparent !important;
+    color: {C['title']} !important;
+    font-weight: 600 !important;
+    padding: 0.5rem 1rem !important;
+    transition: all 0.15s ease !important;
+}}
+
+.stButton > button:hover, .stDownloadButton > button:hover {{
+    background-color: {C['title']} !important;
+    color: #ffffff !important;
+    box-shadow: 0px 4px 12px rgba(0,0,0,.15) !important;
+    transform: translateY(-1px);
+}}
+
+.stButton > button p, .stDownloadButton > button p {{
+    color: inherit !important;
+}}
+
+/* --- Select boxes / dropdowns --- */
+[data-baseweb="select"] > div {{
+    border-radius: 10px !important;
+}}
+
+/* --- Sliders --- */
+[data-testid="stSlider"] [role="slider"] {{
+    background-color: {C['title']} !important;
+}}
 
 @keyframes scorePop {{
     0%   {{ opacity: 0; transform: scale(0.85); }}
