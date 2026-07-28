@@ -178,7 +178,8 @@ h1, h2, h3, .main-title, [data-testid="stMarkdownContainer"] h1,
 }}
 
 section[data-testid="stSidebar"] {{
-    background-color:{C['card_bg']} !important;
+    background: linear-gradient(180deg, {C['card_bg']} 0%, {hex_to_rgba(C['title'], 0.05)} 100%) !important;
+    border-right: 1px solid {C['border']};
 }}
 
 .main-title{{
@@ -264,24 +265,48 @@ section[data-testid="stSidebar"] {{
 
 /* --- Buttons (sidebar + everywhere) --- */
 .stButton > button, .stDownloadButton > button {{
-    border-radius: 10px !important;
+    border-radius: 12px !important;
     border: 1.5px solid {C['title']} !important;
     background-color: transparent !important;
     color: {C['title']} !important;
     font-weight: 600 !important;
     padding: 0.5rem 1rem !important;
     transition: all 0.15s ease !important;
+    justify-content: flex-start !important;
 }}
 
 .stButton > button:hover, .stDownloadButton > button:hover {{
-    background-color: {C['title']} !important;
+    background-color: {hex_to_rgba(C['title'], 0.10)} !important;
+    color: {C['title']} !important;
+    box-shadow: 0px 4px 12px {hex_to_rgba(C['title'], 0.15)} !important;
+    transform: translateX(2px);
+}}
+
+/* Active nav item — solid filled gradient */
+.stButton > button[kind="primary"] {{
+    border: none !important;
+    background: linear-gradient(135deg, {C['title']}, {C['accent']}) !important;
     color: #ffffff !important;
-    box-shadow: 0px 4px 12px rgba(0,0,0,.15) !important;
-    transform: translateY(-1px);
+    font-weight: 700 !important;
+    box-shadow: 0px 4px 14px {hex_to_rgba(C['title'], 0.35)} !important;
+}}
+
+.stButton > button[kind="primary"]:hover {{
+    background: linear-gradient(135deg, {C['title']}, {C['accent']}) !important;
+    color: #ffffff !important;
+    transform: translateX(2px);
 }}
 
 .stButton > button p, .stDownloadButton > button p {{
     color: inherit !important;
+}}
+
+/* --- Dividers --- */
+hr {{
+    border: none !important;
+    border-top: 1px solid {C['border']} !important;
+    margin: 16px 0 !important;
+    opacity: 1 !important;
 }}
 
 /* --- Select boxes / dropdowns --- */
@@ -824,24 +849,55 @@ def animate_score(final_score):
 # --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
-st.sidebar.image(LOGO_URL, width=80)
-st.sidebar.title("❤️ PulseGuard")
-
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "🏠 Home",
-        "❤️ Heart Dashboard",
-        "⌚ Smartwatch",
-        "📈 Health Summary",
-        "🤖 Ask PulseGuard",
-        "💡 Accuracy Tips",
-        "ℹ️ About"
-    ]
+st.sidebar.markdown(
+    f"""
+    <div style="text-align:center;padding:8px 0 22px 0;">
+        <img src="{LOGO_URL}" width="60" style="border-radius:16px;box-shadow:0 6px 16px {hex_to_rgba(C['title'], 0.30)};">
+        <div style="font-family:'Poppins',sans-serif;font-size:24px;font-weight:700;color:{C['title']} !important;margin-top:10px;">PulseGuard</div>
+        <div style="font-size:11px;letter-spacing:1.5px;color:{C['subtitle']} !important;text-transform:uppercase;margin-top:2px;">Heart Health Companion</div>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
+NAV_ITEMS = [
+    "🏠 Home",
+    "❤️ Heart Dashboard",
+    "⌚ Smartwatch",
+    "📈 Health Summary",
+    "🤖 Ask PulseGuard",
+    "💡 Accuracy Tips",
+    "ℹ️ About"
+]
+
+if "current_page" not in st.session_state:
+    st.session_state.current_page = NAV_ITEMS[0]
+
+st.sidebar.markdown(
+    f"<div style='font-size:11px;letter-spacing:1.5px;color:{C['subtitle']};font-weight:700;margin:0 0 8px 2px;'>NAVIGATION</div>",
+    unsafe_allow_html=True
+)
+
+for _item in NAV_ITEMS:
+    _is_active = st.session_state.current_page == _item
+    if st.sidebar.button(_item, key=f"nav_{_item}", use_container_width=True,
+                          type="primary" if _is_active else "secondary"):
+        st.session_state.current_page = _item
+        st.rerun()
+
+page = st.session_state.current_page
+
 st.sidebar.markdown("---")
-st.sidebar.success("Sprint 1 Prototype")
+st.sidebar.markdown(
+    f"""
+    <div style="background:{hex_to_rgba(C['accent'], 0.15)};border:1px solid {C['accent']};
+    color:{C['accent']} !important;padding:8px 14px;border-radius:20px;text-align:center;
+    font-weight:600;font-size:13px;margin-bottom:14px;">
+        🧪 Sprint 1 Prototype
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 st.sidebar.toggle("🌙 Dark Mode", key="dark_mode")
 
 st.sidebar.markdown("---")
