@@ -58,7 +58,7 @@ if "trend_data" not in st.session_state:
 
 if "full_history" not in st.session_state:
     _history = {}
-    for _i in range(14, 0, -1):
+    for _i in range(30, 0, -1):
         _d = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=_i)).strftime("%Y-%m-%d")
         _history[_d] = {
             "heart_rate": random.randint(60, 105),
@@ -326,6 +326,76 @@ hr {{
 
 .score-pop {{
     animation: scorePop 0.4s ease-out;
+}}
+
+/* --------------------------------------------------
+   Fix: the wildcard "font-family: Inter" rule above
+   also lands on Streamlit's icon fonts (e.g. the
+   sidebar collapse/expand arrow), which replaces the
+   glyph with literal icon-name text. Restore the icon
+   font specifically for those elements.
+   -------------------------------------------------- */
+[data-testid="stIconMaterial"],
+[data-testid="stSidebarCollapseButton"] span,
+[data-testid="stSidebarCollapsedControl"] span,
+[data-testid="collapsedControl"] span,
+span[class*="material-icons"],
+button[kind="header"] span {{
+    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
+    font-weight: normal !important;
+}}
+
+/* --------------------------------------------------
+   Fix: prevent text from different elements crowding
+   or overlapping each other (headers, cards, chips,
+   sidebar nav labels).
+   -------------------------------------------------- */
+.stApp p, .stApp span, .stApp div, .stApp label {{
+    line-height: 1.55 !important;
+}}
+
+.main-title {{
+    line-height: 1.2 !important;
+}}
+
+.subtitle {{
+    line-height: 1.4 !important;
+    margin-top: 4px !important;
+}}
+
+.hero-banner {{
+    flex-wrap: wrap;
+    row-gap: 12px;
+}}
+
+.metric-card {{
+    min-height: 96px;
+}}
+
+.metric-title {{
+    line-height: 1.3 !important;
+    margin-bottom: 6px;
+}}
+
+.metric-value {{
+    line-height: 1.15 !important;
+}}
+
+.chip {{
+    white-space: nowrap;
+    line-height: 1.4 !important;
+}}
+
+[data-testid="stSidebar"] .stButton > button {{
+    white-space: normal !important;
+    line-height: 1.35 !important;
+    text-align: left !important;
+    height: auto !important;
+    min-height: 2.5rem;
+}}
+
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"] {{
+    line-height: 1.3 !important;
 }}
 
 </style>
@@ -650,6 +720,54 @@ def compute_streak(today_score):
     return streak
 
 
+def compute_period_stats(days, today_values):
+    """
+    Build an averages/min/max/trend summary across the last `days` days
+    (including today's live slider values), pulled from simulated history.
+    Returns a dict keyed by metric with {avg, min, max, trend} plus a
+    day-by-day series usable for a period chart.
+    """
+    metrics = [
+        "heart_rate", "resting_hr", "hrv", "blood_pressure_variability",
+        "heart_rate_recovery", "sleep_quality", "steps",
+    ]
+    dates_sorted = sorted(st.session_state.full_history.keys())
+    past_days = dates_sorted[-(days - 1):] if days > 1 else []
+
+    series = {m: [] for m in metrics}
+    labels = []
+    for d in past_days:
+        day = st.session_state.full_history[d]
+        labels.append(datetime.strptime(d, "%Y-%m-%d").strftime("%b %d"))
+        for m in metrics:
+            series[m].append(day[m])
+    labels.append("Today")
+    for m in metrics:
+        series[m].append(today_values[m])
+
+    summary = {}
+    for m in metrics:
+        vals = series[m]
+        first_half = vals[: max(1, len(vals) // 2)]
+        second_half = vals[max(1, len(vals) // 2):] or vals
+        avg_first = sum(first_half) / len(first_half)
+        avg_second = sum(second_half) / len(second_half)
+        if avg_second > avg_first * 1.03:
+            trend = "up"
+        elif avg_second < avg_first * 0.97:
+            trend = "down"
+        else:
+            trend = "flat"
+        summary[m] = {
+            "avg": round(sum(vals) / len(vals), 1),
+            "min": min(vals),
+            "max": max(vals),
+            "trend": trend,
+        }
+
+    return {"labels": labels, "series": series, "summary": summary, "days": days}
+
+
 def _pdf_safe(text):
     """fpdf2 core fonts only support latin-1; strip anything outside that (emoji, etc.)."""
     return text.encode("latin-1", "ignore").decode("latin-1")
@@ -693,38 +811,87 @@ def ai_chat_response(question, score, positives, concerns, hr, rhr, hrv_v, sleep
     )
 
 
-def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
-                         bp, recovery, sleep_quality, steps, battery, last_sync, watch_name):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    content_width = pdf.w - pdf.l_margin - pdf.r_margin
+class _PulseGuardPDF(FPDF):
+    """FPDF subclass so we get a consistent footer with page numbers on every page."""
 
-    pdf.set_font("Helvetica", "B", 22)
-    pdf.set_text_color(27, 58, 92)
-    pdf.cell(content_width, 12, _pdf_safe("PulseGuard Health Report"), ln=True)
+    def footer(self):
+        self.set_y(-16)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(140, 140, 140)
+        self.cell(0, 8, _pdf_safe(f"PulseGuard Health Report  |  Page {self.page_no()}"), align="C")
 
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(90, 90, 90)
-    pdf.cell(content_width, 6, _pdf_safe(f"Generated {last_sync} ET  |  Device: {watch_name}"), ln=True)
-    pdf.ln(4)
 
-    if score >= 90:
-        score_rgb = (46, 125, 50)
-    elif score >= 75:
-        score_rgb = (249, 168, 37)
-    else:
-        score_rgb = (198, 40, 40)
-
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.set_text_color(*score_rgb)
-    pdf.cell(content_width, 10, _pdf_safe(f"Heart Health Score: {score}/100"), ln=True)
+def _pdf_section_header(pdf, text, content_width, rgb=(27, 58, 92)):
+    pdf.set_fill_color(*rgb)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(content_width, 9, "  " + _pdf_safe(text), border=0, fill=True, ln=True)
+    pdf.set_text_color(20, 20, 20)
     pdf.ln(2)
 
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(content_width, 8, "Today's Metrics", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+
+def _trend_arrow(trend):
+    return {"up": "Rising", "down": "Falling", "flat": "Stable"}.get(trend, "Stable")
+
+
+def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
+                         bp, recovery, sleep_quality, steps, battery, last_sync, watch_name,
+                         period_label="Today", period_stats=None, patient_name=""):
+    pdf = _PulseGuardPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+    content_width = pdf.w - pdf.l_margin - pdf.r_margin
+    generated_on = datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
+
+    # ---------- Letterhead ----------
+    pdf.set_fill_color(27, 58, 92)
+    pdf.rect(0, 0, pdf.w, 32, style="F")
+    pdf.set_xy(pdf.l_margin, 8)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(content_width, 10, _pdf_safe("PulseGuard Cardiovascular Report"), ln=True)
+    pdf.set_x(pdf.l_margin)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(content_width, 6, _pdf_safe("New Jersey Heart Disease Prevention (NJHDP)"), ln=True)
+    pdf.set_y(36)
+    pdf.set_text_color(20, 20, 20)
+
+    # ---------- Report metadata ----------
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(90, 90, 90)
+    meta_label = patient_name.strip() or "Not provided"
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Patient / User: {meta_label}"))
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Period: {period_label}"), ln=True)
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Generated: {generated_on} ({last_sync} ET)"))
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Data Source Device: {watch_name}"), ln=True)
+    pdf.ln(3)
+
+    # ---------- Score banner ----------
+    if score >= 90:
+        score_rgb = (46, 125, 50)
+        score_word = "Good"
+    elif score >= 75:
+        score_rgb = (191, 144, 0)
+        score_word = "Fair"
+    else:
+        score_rgb = (198, 40, 40)
+        score_word = "Needs Attention"
+
+    pdf.set_fill_color(245, 247, 250)
+    pdf.set_draw_color(*score_rgb)
+    pdf.set_line_width(0.6)
+    pdf.rect(pdf.l_margin, pdf.get_y(), content_width, 20, style="DF")
+    pdf.set_xy(pdf.l_margin + 4, pdf.get_y() + 4)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(*score_rgb)
+    pdf.cell(content_width - 8, 10, _pdf_safe(f"Heart Health Score: {score}/100  ({score_word})"))
+    pdf.ln(20)
+    pdf.set_text_color(20, 20, 20)
+    pdf.ln(4)
+
+    # ---------- Current reading table ----------
+    _pdf_section_header(pdf, f"Current Readings — {period_label}", content_width)
+    pdf.set_font("Helvetica", "", 10.5)
 
     rows = [
         ("Heart Rate", f"{heart_rate} BPM"),
@@ -736,98 +903,224 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
         ("Daily Steps", f"{steps:,}"),
         ("Watch Battery", f"{battery}%"),
     ]
-    label_width = 90
+    label_width = 95
     value_width = content_width - label_width
-    for label, value in rows:
-        pdf.set_fill_color(245, 245, 245)
-        pdf.cell(label_width, 8, _pdf_safe(label), border=0, fill=True)
-        pdf.cell(value_width, 8, _pdf_safe(value), border=0, fill=True, ln=True)
+    for i, (label, value) in enumerate(rows):
+        fill = (245, 245, 245) if i % 2 == 0 else (255, 255, 255)
+        pdf.set_fill_color(*fill)
+        pdf.set_draw_color(225, 225, 225)
+        pdf.cell(label_width, 8, "  " + _pdf_safe(label), border="B", fill=True)
+        pdf.cell(value_width, 8, _pdf_safe(value), border="B", fill=True, ln=True)
+    pdf.ln(5)
 
-    pdf.ln(4)
-
-    if positives:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_text_color(46, 125, 50)
-        pdf.cell(content_width, 8, "What's Going Well", ln=True)
-        pdf.set_font("Helvetica", "", 11)
+    # ---------- Period trend table (week / month views) ----------
+    if period_stats and period_stats.get("days", 1) > 1:
+        _pdf_section_header(pdf, f"Trend Summary — Last {period_stats['days']} Days", content_width)
+        pdf.set_font("Helvetica", "B", 10)
+        col_w = [60, 30, 30, 30, 34]
+        headers = ["Metric", "Average", "Min", "Max", "Trend"]
+        pdf.set_fill_color(27, 58, 92)
+        pdf.set_text_color(255, 255, 255)
+        for w, h in zip(col_w, headers):
+            pdf.cell(w, 8, _pdf_safe(h), border=0, fill=True, align="C")
+        pdf.ln(8)
         pdf.set_text_color(20, 20, 20)
+        pdf.set_font("Helvetica", "", 10)
+
+        metric_display = {
+            "heart_rate": ("Heart Rate", "BPM"),
+            "resting_hr": ("Resting HR", "BPM"),
+            "hrv": ("HRV", "ms"),
+            "blood_pressure_variability": ("BP Variability", "mmHg"),
+            "heart_rate_recovery": ("HR Recovery", "BPM"),
+            "sleep_quality": ("Sleep Quality", "%"),
+            "steps": ("Daily Steps", ""),
+        }
+        summary = period_stats["summary"]
+        for i, (key, (name, unit)) in enumerate(metric_display.items()):
+            s = summary[key]
+            fill = (245, 245, 245) if i % 2 == 0 else (255, 255, 255)
+            pdf.set_fill_color(*fill)
+            pdf.cell(col_w[0], 8, "  " + _pdf_safe(name), border="B", fill=True)
+            pdf.cell(col_w[1], 8, _pdf_safe(f"{s['avg']:,.0f}{unit}"), border="B", fill=True, align="C")
+            pdf.cell(col_w[2], 8, _pdf_safe(f"{s['min']:,.0f}{unit}"), border="B", fill=True, align="C")
+            pdf.cell(col_w[3], 8, _pdf_safe(f"{s['max']:,.0f}{unit}"), border="B", fill=True, align="C")
+            pdf.cell(col_w[4], 8, _pdf_safe(_trend_arrow(s["trend"])), border="B", fill=True, align="C", ln=True)
+        pdf.ln(5)
+
+    # ---------- Clinical observations ----------
+    if positives:
+        _pdf_section_header(pdf, "Favorable Findings", content_width, rgb=(46, 125, 50))
+        pdf.set_font("Helvetica", "", 10.5)
         for p in positives:
             pdf.set_x(pdf.l_margin)
-            pdf.multi_cell(content_width, 6, _pdf_safe(f"- {p}"))
+            pdf.multi_cell(content_width, 6, _pdf_safe(f"-  {p}"))
         pdf.ln(2)
 
     if concerns:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_text_color(198, 40, 40)
-        pdf.cell(content_width, 8, "Areas to Watch", ln=True)
-        pdf.set_font("Helvetica", "", 11)
-        pdf.set_text_color(20, 20, 20)
+        _pdf_section_header(pdf, "Findings Warranting Follow-Up", content_width, rgb=(198, 40, 40))
+        pdf.set_font("Helvetica", "", 10.5)
         for c in concerns:
             pdf.set_x(pdf.l_margin)
-            pdf.multi_cell(content_width, 6, _pdf_safe(f"- {c}"))
+            pdf.multi_cell(content_width, 6, _pdf_safe(f"-  {c}"))
         pdf.ln(2)
 
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.set_text_color(0, 0, 0)
-    pdf.cell(content_width, 8, "AI-Generated Insight", ln=True)
-    pdf.set_font("Helvetica", "", 11)
+    # ---------- Clinical summary narrative ----------
+    _pdf_section_header(pdf, "Summary for Clinical Review", content_width)
+    pdf.set_font("Helvetica", "", 10.5)
+    pdf.set_x(pdf.l_margin)
+    clinical_intro = (
+        f"The following automated summary is derived from consumer wearable-device estimates "
+        f"over the selected reporting period ({period_label}). It is intended to support, not "
+        f"replace, clinical judgment."
+    )
+    pdf.multi_cell(content_width, 6, _pdf_safe(clinical_intro))
+    pdf.ln(1)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(content_width, 6, _pdf_safe(ai_insight))
     pdf.ln(4)
 
-    pdf.set_font("Helvetica", "I", 9)
+    # ---------- Disclaimer ----------
+    pdf.set_draw_color(220, 220, 220)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "I", 8.5)
     pdf.set_text_color(120, 120, 120)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(content_width, 5, _pdf_safe(
-        "This report is generated by an educational prototype and is not a medical diagnosis. "
-        "It is not intended to replace professional medical advice. Consult a qualified "
-        "healthcare provider regarding any concerns."
+        "This report is generated by PulseGuard, an educational prototype, from consumer "
+        "wearable-device estimates. It does not constitute a medical diagnosis and is not a "
+        "substitute for professional medical advice, evaluation, or treatment. Please share this "
+        "report with a qualified healthcare provider and consult them regarding any concerns "
+        "before making medical decisions."
     ))
 
     return bytes(pdf.output())
 
 
+def _load_font(bold, size):
+    """Try real TrueType fonts first (much nicer than the tiny bitmap default), fall back safely."""
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _centered_text(draw, cx, y, text, font, fill):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w = bbox[2] - bbox[0]
+    draw.text((cx - w / 2, y), text, font=font, fill=fill)
+
+
+def _draw_gradient(draw, W, H, top_rgb, bottom_rgb):
+    for y in range(H):
+        t = y / H
+        r = int(top_rgb[0] + (bottom_rgb[0] - top_rgb[0]) * t)
+        g = int(top_rgb[1] + (bottom_rgb[1] - top_rgb[1]) * t)
+        b = int(top_rgb[2] + (bottom_rgb[2] - top_rgb[2]) * t)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+
+
+def _draw_heart(draw, cx, cy, size, fill):
+    """Simple two-circle + triangle heart glyph, drawn with primitives (no external assets)."""
+    r = size / 2
+    draw.ellipse([cx - r, cy - r, cx, cy], fill=fill)
+    draw.ellipse([cx, cy - r, cx + r, cy], fill=fill)
+    draw.polygon(
+        [(cx - r, cy - r * 0.15), (cx + r, cy - r * 0.15), (cx, cy + r * 1.35)],
+        fill=fill,
+    )
+
+
 def generate_share_card(score, heart_rate, sleep_quality, steps, watch_name):
     W, H = 1080, 1920
     if score >= 90:
-        accent = (46, 125, 50)
+        accent = (46, 168, 90)
     elif score >= 75:
-        accent = (249, 168, 37)
+        accent = (233, 168, 45)
     else:
-        accent = (198, 40, 40)
+        accent = (214, 69, 69)
 
-    img = Image.new("RGB", (W, H), (18, 18, 22))
+    dark_navy = (13, 22, 38)
+    deep_navy = (24, 38, 58)
+
+    img = Image.new("RGB", (W, H), dark_navy)
     draw = ImageDraw.Draw(img)
-    draw.rectangle([0, 0, W, 420], fill=accent)
+    _draw_gradient(draw, W, H, deep_navy, dark_navy)
 
-    try:
-        f_brand = ImageFont.load_default(size=56)
-        f_giant = ImageFont.load_default(size=240)
-        f_label = ImageFont.load_default(size=46)
-        f_small = ImageFont.load_default(size=34)
-    except TypeError:
-        f_brand = f_giant = f_label = f_small = ImageFont.load_default()
+    f_brand = _load_font(True, 62)
+    f_tagline = _load_font(False, 32)
+    f_giant = _load_font(True, 190)
+    f_slash = _load_font(True, 44)
+    f_label = _load_font(True, 40)
+    f_value = _load_font(True, 46)
+    f_footer = _load_font(False, 28)
+    f_pill = _load_font(True, 30)
 
-    draw.text((60, 60), "PulseGuard", font=f_brand, fill=(255, 255, 255))
-    draw.text((60, 160), "Daily Heart Health Summary", font=f_small, fill=(255, 255, 255))
+    # ---- Header lockup ----
+    _draw_heart(draw, 90, 108, 66, accent)
+    draw.text((150, 66), "PulseGuard", font=f_brand, fill=(255, 255, 255))
+    draw.text((150, 140), "Daily Heart Health Summary", font=f_tagline, fill=(178, 190, 205))
 
-    draw.text((60, 520), "Heart Health Score", font=f_label, fill=(190, 190, 190))
-    draw.text((60, 590), f"{score}", font=f_giant, fill=accent)
-    draw.text((60, 900), "/ 100", font=f_label, fill=(140, 140, 140))
+    # ---- Status pill ----
+    status_word = "GOOD" if score >= 90 else ("FAIR" if score >= 75 else "MONITOR")
+    pill_bbox = draw.textbbox((0, 0), status_word, font=f_pill)
+    pill_w = (pill_bbox[2] - pill_bbox[0]) + 60
+    draw.rounded_rectangle([W - 60 - pill_w, 60, W - 60, 60 + 64], radius=32, fill=accent)
+    _centered_text(draw, W - 60 - pill_w / 2, 76, status_word, f_pill, (255, 255, 255))
 
-    rows = [
+    # ---- Score ring ----
+    ring_cx, ring_cy, ring_r = W / 2, 560, 270
+    ring_bbox = [ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r]
+    draw.arc(ring_bbox, 0, 360, fill=(52, 66, 88), width=30)
+    sweep_end = -90 + 360 * max(0, min(100, score)) / 100
+    draw.arc(ring_bbox, -90, sweep_end, fill=accent, width=30)
+
+    _centered_text(draw, ring_cx, ring_cy - 130, "HEART HEALTH SCORE", f_label, (150, 165, 182))
+    score_txt = f"{score}"
+    score_bbox = draw.textbbox((0, 0), score_txt, font=f_giant)
+    score_w = score_bbox[2] - score_bbox[0]
+    draw.text((ring_cx - score_w / 2, ring_cy - 110), score_txt, font=f_giant, fill=(255, 255, 255))
+    _centered_text(draw, ring_cx, ring_cy + 95, "/ 100", f_slash, (150, 165, 182))
+
+    # ---- Stat cards (2x2 grid) ----
+    stats = [
         ("Heart Rate", f"{heart_rate} BPM"),
         ("Sleep Quality", f"{sleep_quality}%"),
         ("Daily Steps", f"{steps:,}"),
         ("Device", watch_name),
     ]
-    y = 1050
-    for label, value in rows:
-        draw.text((60, y), label, font=f_small, fill=(160, 160, 160))
-        draw.text((60, y + 45), value, font=f_label, fill=(255, 255, 255))
-        y += 140
+    grid_top = 950
+    card_w, card_h, gap = 470, 190, 40
+    positions = [
+        (60, grid_top), (60 + card_w + gap, grid_top),
+        (60, grid_top + card_h + gap), (60 + card_w + gap, grid_top + card_h + gap),
+    ]
+    for (x, y), (label, value) in zip(positions, stats):
+        draw.rounded_rectangle([x, y, x + card_w, y + card_h], radius=26, fill=(30, 44, 66))
+        draw.rounded_rectangle([x, y, x + 10, y + card_h], radius=6, fill=accent)
+        draw.text((x + 36, y + 32), label.upper(), font=f_footer, fill=(150, 165, 182))
+        draw.text((x + 36, y + 90), value, font=f_value, fill=(255, 255, 255))
 
-    draw.text((60, H - 100), "Generated with PulseGuard (prototype)", font=f_small, fill=(110, 110, 110))
+    # ---- Footer ----
+    footer_y = grid_top + 2 * card_h + gap + 60
+    draw.line([(60, footer_y), (W - 60, footer_y)], fill=(52, 66, 88), width=2)
+    _centered_text(draw, W / 2, footer_y + 30, "Generated with PulseGuard — educational prototype",
+                   f_footer, (140, 155, 172))
+    _centered_text(draw, W / 2, footer_y + 70, "Not a medical diagnosis. Consult a healthcare professional.",
+                   f_footer, (110, 124, 140))
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -865,7 +1158,7 @@ NAV_ITEMS = [
     "❤️ Heart Dashboard",
     "⌚ Smartwatch",
     "📈 Health Summary",
-    "🤖 Ask PulseGuard",
+    "🤖 Ask PulseGuard AI",
     "💡 Accuracy Tips",
     "ℹ️ About"
 ]
@@ -960,29 +1253,34 @@ last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
 # =====================================================
 if page == "🏠 Home":
 
+    _today_score, _today_positives, _today_concerns = generate_health_summary()
+    _score_color = score_color(_today_score)
+
     st.markdown(
         f"""
         <div class="hero-banner">
             <img src="{LOGO_URL}" width="70" style="border-radius:14px;">
-            <div>
+            <div style="flex:1;min-width:220px;">
                 <div class="main-title" style="margin-bottom:0;">❤️ PulseGuard</div>
-                <div class="subtitle">Simple Steps for a Stronger, Healthier Heart.</div>
+                <div class="subtitle">Simple steps for a stronger, healthier heart.</div>
+            </div>
+            <div style="text-align:center;background:{hex_to_rgba(_score_color, 0.14)};
+                        border:2px solid {_score_color};border-radius:18px;padding:14px 26px;">
+                <div style="font-size:12px;letter-spacing:1px;color:{C['subtitle']} !important;
+                            text-transform:uppercase;font-weight:700;">Today's Score</div>
+                <div style="font-size:38px;font-weight:800;color:{_score_color} !important;line-height:1.1;">
+                    {_today_score}<span style="font-size:16px;color:{C['subtitle']} !important;">/100</span>
+                </div>
             </div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    st.success(
-        "Welcome to PulseGuard. Track your symptoms, understand your heart health, and get guidance to help lower your risk of heart disease.     "
-        "Important heart-health information in one place."
-    )
-
     tip_col, streak_col = st.columns([2, 1])
     with tip_col:
         st.info(f"**Tip of the Day:** {TIPS[st.session_state.tip_index]}")
     with streak_col:
-        _today_score, _, _ = generate_health_summary()
         _streak = compute_streak(_today_score)
         if _streak > 0:
             st.warning(f"🔥 **{_streak}-day streak** of good heart health!")
@@ -997,47 +1295,89 @@ if page == "🏠 Home":
         else:
             st.error("🔴 Smartwatch Not Connected")
 
-        st.metric("Battery", f"{battery}%")
-        st.metric("Last Sync", last_sync)
-        st.button("🔄 Refresh Data")
+        mcol1, mcol2 = st.columns(2)
+        with mcol1:
+            st.metric("Battery", f"{battery}%")
+        with mcol2:
+            st.metric("Last Sync", last_sync)
+        st.button("🔄 Refresh Data", use_container_width=True)
 
     with col2:
-        st.info(
-            """
-PulseGuard helps you monitor:
-
-• Heart Rate
-
-• Resting Heart Rate
-
-• Heart Rate Variability
-
-• Blood Pressure Variability
-
-• Heart Rate Recovery
-
-• Sleep Quality
-
-• Daily Step Count
-"""
+        st.markdown(
+            f"""
+            <div class="metric-card" style="height:100%;">
+                <div class="metric-title" style="margin-bottom:10px;">📡 What PulseGuard Monitors</div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                    {''.join(
+                        f'<span class="chip" style="background:{hex_to_rgba(C["title"], 0.12)};'
+                        f'color:{C["title"]} !important;border:1px solid {hex_to_rgba(C["title"], 0.3)};">{label}</span>'
+                        for label in ["❤️ Heart Rate", "💓 Resting HR", "📊 HRV", "🩺 BP Variability",
+                                      "🏃 Recovery", "😴 Sleep", "👟 Steps"]
+                    )}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
     st.markdown("---")
-    st.subheader("Today's Health Snapshot")
+    st.subheader("📊 Today's Health Snapshot")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        _, color, _ = metric_status("heart_rate", heart_rate)
-        render_metric_card("❤️ Heart Rate", f"{heart_rate} BPM", color)
-    with c2:
-        _, color, _ = metric_status("sleep", sleep_quality)
-        render_metric_card("😴 Sleep", f"{sleep_quality}%", color)
-    with c3:
-        _, color, _ = metric_status("steps", steps)
-        render_metric_card("👟 Steps", f"{steps:,}", color)
+    snap_row1 = st.columns(4)
+    snap_items = [
+        ("❤️ Heart Rate", f"{heart_rate} BPM", "heart_rate", heart_rate),
+        ("💓 Resting HR", f"{resting_hr} BPM", "resting_hr", resting_hr),
+        ("📊 HRV", f"{hrv} ms", "hrv", hrv),
+        ("🩺 BP Variability", f"{blood_pressure_variability} mmHg", "bp_variability", blood_pressure_variability),
+    ]
+    for _col, (_title, _val, _kind, _raw) in zip(snap_row1, snap_items):
+        with _col:
+            _, _color, _ = metric_status(_kind, _raw)
+            render_metric_card(_title, _val, _color)
+
+    snap_row2 = st.columns(3)
+    snap_items2 = [
+        ("🏃 Recovery", f"{heart_rate_recovery} BPM", "recovery", heart_rate_recovery),
+        ("😴 Sleep", f"{sleep_quality}%", "sleep", sleep_quality),
+        ("👟 Steps", f"{steps:,}", "steps", steps),
+    ]
+    for _col, (_title, _val, _kind, _raw) in zip(snap_row2, snap_items2):
+        with _col:
+            _, _color, _ = metric_status(_kind, _raw)
+            render_metric_card(_title, _val, _color)
 
     st.progress(min(steps / 10000, 1.0))
     st.caption("Daily step goal: 10,000 steps")
+
+    st.markdown("---")
+    viz_col, radar_col = st.columns([3, 2])
+    with viz_col:
+        st.subheader("📉 7-Day Trend Preview")
+        render_trend_chart(heart_rate, sleep_quality, steps)
+    with radar_col:
+        st.subheader("🕸️ Vitals at a Glance")
+        render_radar_chart(heart_rate, resting_hr, hrv, blood_pressure_variability,
+                            heart_rate_recovery, sleep_quality, steps)
+
+    st.markdown("---")
+    st.subheader("⚡ Quick Actions")
+    qa1, qa2, qa3, qa4 = st.columns(4)
+    with qa1:
+        if st.button("❤️ Full Dashboard", use_container_width=True):
+            st.session_state.current_page = "❤️ Heart Dashboard"
+            st.rerun()
+    with qa2:
+        if st.button("📈 Health Summary", use_container_width=True):
+            st.session_state.current_page = "📈 Health Summary"
+            st.rerun()
+    with qa3:
+        if st.button("🤖 Ask PulseGuard AI", use_container_width=True):
+            st.session_state.current_page = "🤖 Ask PulseGuard AI"
+            st.rerun()
+    with qa4:
+        if st.button("⌚ Smartwatch", use_container_width=True):
+            st.session_state.current_page = "⌚ Smartwatch"
+            st.rerun()
 
 # =====================================================
 # HEART DASHBOARD
@@ -1353,43 +1693,59 @@ elif page == "📈 Health Summary":
             st.caption("No concerns flagged for this simulated day.")
 
     st.markdown("---")
+    st.subheader("📤 Export & Share")
+    st.caption("Choose how much history to include in the doctor report, then download your files below.")
 
-    report_text = f"""PulseGuard Daily Report
+    RANGE_OPTIONS = {
+        "1 Day": 1,
+        "1 Week": 7,
+        "1 Month": 30,
+    }
+    _range_label = st.radio(
+        "🗓️ Report range",
+        list(RANGE_OPTIONS.keys()),
+        index=0,
+        horizontal=True,
+        help="Controls how much simulated history is summarized in the Doctor Report PDF.",
+    )
+    _range_days = RANGE_OPTIONS[_range_label]
 
-Heart Rate: {heart_rate} BPM
-Resting Heart Rate: {resting_hr} BPM
-Heart Rate Variability: {hrv} ms
-Blood Pressure Variability: {blood_pressure_variability} mmHg
-Heart Rate Recovery: {heart_rate_recovery} BPM
-Sleep Quality: {sleep_quality}%
-Daily Steps: {steps}
-Overall Score: {score}/100
-
-AI Insight Summary:
-{ai_insight}
-"""
+    _today_values = {
+        "heart_rate": heart_rate,
+        "resting_hr": resting_hr,
+        "hrv": hrv,
+        "blood_pressure_variability": blood_pressure_variability,
+        "heart_rate_recovery": heart_rate_recovery,
+        "sleep_quality": sleep_quality,
+        "steps": steps,
+    }
+    _period_stats = compute_period_stats(_range_days, _today_values) if _range_days > 1 else None
+    _period_label = f"{_range_label} ({datetime.now(ZoneInfo('America/New_York')).strftime('%b %d, %Y')})"
 
     pdf_bytes = generate_pdf_report(
         score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
         blood_pressure_variability, heart_rate_recovery, sleep_quality, steps,
-        battery, last_sync, watch_plain_name
+        battery, last_sync, watch_plain_name,
+        period_label=_period_label, period_stats=_period_stats,
     )
     share_card_bytes = generate_share_card(score, heart_rate, sleep_quality, steps, watch_plain_name)
 
     dl_col1, dl_col2 = st.columns(2)
     with dl_col1:
         st.download_button(
-            "📄 Download Doctor Report (PDF)",
+            f"📄 Download Doctor Report — {_range_label} (PDF)",
             data=pdf_bytes,
-            file_name="PulseGuard_Report.pdf",
-            mime="application/pdf"
+            file_name=f"PulseGuard_Report_{_range_label.replace(' ', '')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
         )
     with dl_col2:
         st.download_button(
             "📸 Download Shareable Summary Card",
             data=share_card_bytes,
             file_name="PulseGuard_Summary.png",
-            mime="image/png"
+            mime="image/png",
+            use_container_width=True,
         )
 
     st.caption(
@@ -1399,9 +1755,9 @@ AI Insight Summary:
 # =====================================================
 # AI CHAT ASSISTANT PAGE
 # =====================================================
-elif page == "🤖 Ask PulseGuard":
+elif page == "🤖 Ask PulseGuard AI":
 
-    st.title("🤖 Ask PulseGuard")
+    st.title("🤖 Ask PulseGuard AI")
     st.caption(
         "This is a simulated, rule-based demo assistant — it reads your current sidebar values "
         "and answers with simple templated logic. It is not a real AI model and not medical advice."
@@ -1430,44 +1786,100 @@ elif page == "🤖 Ask PulseGuard":
 
 elif page == "💡 Accuracy Tips":
 
-    st.title("💡 Accuracy Tips")
-    st.write("Follow these tips to help your smartwatch collect the most reliable heart-health information.")
-    st.markdown("---")
+    st.markdown(
+        f"""
+        <div class="hero-banner">
+            <div style="font-size:48px;">💡</div>
+            <div>
+                <div class="main-title" style="font-size:34px;margin-bottom:0;">Accuracy Tips</div>
+                <div class="subtitle" style="font-size:17px;">
+                    Follow these tips to help your smartwatch collect the most reliable heart-health information.
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    def _tip_card(icon, text, color):
+        st.markdown(
+            f"""
+            <div class="metric-card" style="border-left:6px solid {color};padding:16px 18px;">
+                <div style="font-size:22px;margin-bottom:6px;">{icon}</div>
+                <div style="font-size:15px;color:{C['text']} !important;">{text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     st.subheader("⌚ Wearing Your Smartwatch")
-    st.success("✔ Wear your watch snugly, but comfortably.")
-    st.success("✔ Keep the sensors clean.")
-    st.success("✔ Charge your watch regularly.")
-    st.success("✔ Wear the watch in the same position each day.")
+    wear_tips = [
+        ("✅", "Wear your watch snugly, but comfortably — not too loose."),
+        ("🧼", "Keep the sensors clean and free of lotion, sweat, or dirt."),
+        ("🔋", "Charge your watch regularly to avoid gaps in tracking."),
+        ("📍", "Wear the watch in the same position each day for consistency."),
+    ]
+    wear_cols = st.columns(len(wear_tips))
+    for _col, (icon, text) in zip(wear_cols, wear_tips):
+        with _col:
+            _tip_card(icon, text, GOOD)
 
     st.markdown("---")
-    st.subheader("❤️ Heart Health Tips")
-    st.info("❤️ Exercise regularly.")
-    st.info("🥗 Eat a heart-healthy diet.")
-    st.info("💧 Stay hydrated.")
-    st.info("😴 Aim for 7–9 hours of sleep.")
-    st.info("🚭 Avoid smoking.")
-    st.info("🧘 Manage stress.")
+    st.subheader("❤️ Heart Health Habits")
+    health_tips = [
+        ("🏃", "Exercise regularly to strengthen your cardiovascular system."),
+        ("🥗", "Eat a heart-healthy diet rich in fruits, vegetables, and whole grains."),
+        ("💧", "Stay hydrated throughout the day."),
+        ("😴", "Aim for 7–9 hours of consistent, quality sleep."),
+        ("🚭", "Avoid smoking and limit exposure to secondhand smoke."),
+        ("🧘", "Manage stress with breathing exercises, mindfulness, or rest."),
+    ]
+    health_cols_row1 = st.columns(3)
+    for _col, (icon, text) in zip(health_cols_row1, health_tips[:3]):
+        with _col:
+            _tip_card(icon, text, C["title"])
+    health_cols_row2 = st.columns(3)
+    for _col, (icon, text) in zip(health_cols_row2, health_tips[3:]):
+        with _col:
+            _tip_card(icon, text, C["title"])
 
     st.markdown("---")
-    st.subheader("⚠ When Should You Contact a Doctor?")
-    st.warning("""
-You should seek medical attention if you experience:
+    st.subheader("⚠️ When Should You Contact a Doctor?")
 
-• Chest pain
+    warn_symptoms = [
+        "Chest pain", "Difficulty breathing", "Severe dizziness",
+        "Fainting", "Unusually fast or slow heart rate", "Any symptom that concerns you",
+    ]
+    st.markdown(
+        f"""
+        <div class="metric-card" style="border-left:6px solid {WARN};">
+            <div class="metric-title" style="margin-bottom:10px;">Seek medical attention if you experience:</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                {''.join(
+                    f'<span class="chip" style="background:{hex_to_rgba(WARN, 0.15)};'
+                    f'color:{WARN} !important;border:1px solid {WARN};">⚠ {s}</span>'
+                    for s in warn_symptoms
+                )}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-• Difficulty breathing
-
-• Severe dizziness
-
-• Fainting
-
-• An unusually fast or slow heart rate
-
-• Any symptoms that concern you
-""")
-
-    st.error("If you think you are experiencing a medical emergency, call your local emergency services immediately.")
+    st.markdown(
+        f"""
+        <div style="background:{hex_to_rgba(DANGER, 0.14)};border:2px solid {DANGER};
+                    border-radius:16px;padding:18px 22px;margin-top:16px;
+                    display:flex;align-items:center;gap:14px;">
+            <div style="font-size:34px;">🚨</div>
+            <div style="color:{DANGER} !important;font-weight:700;font-size:15px;">
+                If you think you are experiencing a medical emergency, call your local emergency
+                services immediately.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 # =====================================================
 # ABOUT PAGE
