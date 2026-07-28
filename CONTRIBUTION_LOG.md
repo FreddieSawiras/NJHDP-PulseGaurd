@@ -10,7 +10,7 @@
 
 | Task / Feature Description | Assigned To | Linked GitHub Issue | Status |
 | :--- | :--- | :--- | :--- |
-| Create a simple, easy to use User Interface | 🎨 Rithvik | #1 | Complete ✅ |
+| Create a simple, easy to use User Interface | 🎨 Rithvik | #1 | ✅ Complete |
 | Resting Heart Rate Integration | 🐍 Freddie | #2 | ✅ Complete |
 | Heart rate per step calculation | 🐍 Freddie | #3 | ✅ Complete |
 | Heart rate variability (HRV) metrics | 🐍 Freddie | #4 | ✅ Complete |
