@@ -84,7 +84,6 @@ If the app identifies a situation that warrants professional attention, users ca
 - Heart-rate trends
 - ECG events, when available from a connected device
 - Sleep
-- Exercise/activity
 - Blood pressure, when available
 
 This could help users provide their doctor with organized information during an appointment.
