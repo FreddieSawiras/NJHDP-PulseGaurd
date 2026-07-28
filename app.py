@@ -56,6 +56,7 @@ if "trend_data" not in st.session_state:
         "steps": [random.randint(4000, 9000) for _ in range(6)],
     }
 
+
 if "full_history" not in st.session_state:
     _history = {}
     for _i in range(14, 0, -1):
