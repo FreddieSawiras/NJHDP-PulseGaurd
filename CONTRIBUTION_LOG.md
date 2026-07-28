@@ -18,6 +18,7 @@
 | Sleep quality monitoring module | ✍️ Jesse | #6 | ✅ Complete |
 | Daily Step count engine | 🐍 Freddie | #7 | ✅ Complete |
 | Project setup & add collaborators | 🐍 Freddie | N/A | ✅ Complete |
+| Create and assign issues | 🧭 Mohi | N/A | ✅ Complete |
 | Document team roles & initiate log | 🧭 Mohi | N/A | ✅ Complete |
 
 ## Contribution Tracking Rules
