@@ -10,12 +10,12 @@
 
 | Task / Feature Description | Assigned To | Linked GitHub Issue | Status |
 | :--- | :--- | :--- | :--- |
-| Create a simple, easy to use User Interface | 🎨 Rithvik | #1 | 🔄 In Progress |
+| Create a simple, easy to use User Interface | 🎨 Rithvik | #1 | Complete ✅ |
 | Resting Heart Rate Integration | 🐍 Freddie | #2 | ✅ Complete |
 | Heart rate per step calculation | 🐍 Freddie | #3 | ✅ Complete |
 | Heart rate variability (HRV) metrics | 🐍 Freddie | #4 | ✅ Complete |
 | Blood pressure variability tracking | 🐍 Freddie / ✍️ Jesse | #5 | ✅ Complete |
-| Sleep quality monitoring module | ✍️ Jesse | #6 | ⏳ Not Started |
+| Sleep quality monitoring module | ✍️ Jesse | #6 | ✅ Complete |
 | Daily Step count engine | 🐍 Freddie | #7 | ✅ Complete |
 | Project setup & add collaborators | 🐍 Freddie | N/A | ✅ Complete |
 | Document team roles & initiate log | 🧭 Mohi | N/A | ✅ Complete |
