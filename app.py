@@ -16,7 +16,8 @@ from PIL import Image, ImageDraw, ImageFont
 st.set_page_config(
     page_title="PulseGaurd",
     page_icon="❤️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
@@ -117,25 +118,28 @@ WATCH_OPTIONS = {
 }
 
 # --------------------------------------------------
-# Color palette (Light / Dark mode)
+# Color palette (Light / Dark mode) — "Aurora" theme:
+# indigo/violet primary with an emerald accent, replacing
+# the old navy/teal look for a more modern SaaS feel.
 # --------------------------------------------------
 if st.session_state.dark_mode:
     C = dict(
-        bg="#0c141f", card_bg="#152232", text="#eaf1f8", subtitle="#9fb3c8",
-        title="#5B9BD9", accent="#3AAFA9", gold="#E3A857",
-        border="#22334a", chip_bg_alpha="33",
+        bg="#0d0f1a", card_bg="#171a28", text="#e9eaf3", subtitle="#98a0b8",
+        title="#8b7cf6", accent="#22d3ae", gold="#fbbf24",
+        border="#282c40", chip_bg_alpha="33",
     )
 else:
     C = dict(
-        bg="#f2f6fa", card_bg="#ffffff", text="#16283c", subtitle="#5b6b7c",
-        title="#1B3A5C", accent="#2E8B84", gold="#D9973F",
-        border="#e1e8f0", chip_bg_alpha="22",
+        bg="#f5f6fb", card_bg="#ffffff", text="#1c1f2b", subtitle="#666f80",
+        title="#6d5ce7", accent="#0f9d8a", gold="#d97706",
+        border="#e6e8f2", chip_bg_alpha="1f",
     )
 
 # GOOD/WARN/DANGER stay reserved for genuine health-status signals (green/amber/red)
 # so alerts remain instantly recognizable — the brand identity itself uses the
-# navy/teal/gold palette above instead of red, to keep the app feeling calm and safe.
+# indigo/emerald/gold palette above instead of red, to keep the app feeling calm and safe.
 GOOD, WARN, DANGER = "#2e7d32", "#f9a825", "#c62828"
+
 
 
 def hex_to_rgba(hex_color, alpha=0.2):
@@ -162,8 +166,7 @@ st.markdown(f"""
 
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600&display=swap');
 
-.stApp, .stApp *,
-section[data-testid="stSidebar"], section[data-testid="stSidebar"] * {{
+.stApp, .stApp * {{
     color:{C['text']} !important;
     font-family: 'Inter', -apple-system, sans-serif;
 }}
@@ -177,9 +180,10 @@ h1, h2, h3, .main-title, [data-testid="stMarkdownContainer"] h1,
     background-color:{C['bg']};
 }}
 
-section[data-testid="stSidebar"] {{
-    background: linear-gradient(180deg, {C['card_bg']} 0%, {hex_to_rgba(C['title'], 0.05)} 100%) !important;
-    border-right: 1px solid {C['border']};
+/* Sidebar has been removed in favor of a top navbar — hide any residual
+   sidebar chrome (including the collapse arrow) so nothing is left behind. */
+section[data-testid="stSidebar"], [data-testid="collapsedControl"] {{
+    display: none !important;
 }}
 
 .main-title{{
@@ -192,6 +196,41 @@ section[data-testid="stSidebar"] {{
     color:{C['subtitle']} !important;
     font-size:20px;
 }}
+
+.navbar-brand{{
+    display:flex;
+    align-items:center;
+    gap:14px;
+}}
+
+.navbar-title{{
+    font-family:'Poppins',sans-serif;
+    font-size:22px;
+    font-weight:700;
+    color:{C['title']} !important;
+    line-height:1.1;
+}}
+
+.navbar-subtitle{{
+    font-size:11px;
+    letter-spacing:1.3px;
+    color:{C['subtitle']} !important;
+    text-transform:uppercase;
+    margin-top:2px;
+}}
+
+/* Pill-style top navigation tabs, built from a row of st.button widgets */
+.nav-row .stButton > button{{
+    border-radius: 999px !important;
+    justify-content: center !important;
+    font-size: 14px !important;
+    padding: 0.45rem 0.6rem !important;
+}}
+
+.nav-row {{
+    margin-bottom: 6px;
+}}
+
 
 .metric-card{{
     background:{C['card_bg']};
@@ -330,15 +369,12 @@ hr {{
 
 /* --------------------------------------------------
    Fix: the wildcard "font-family: Inter" rule above
-   also lands on Streamlit's icon fonts (e.g. the
-   sidebar collapse/expand arrow), which replaces the
-   glyph with literal icon-name text. Restore the icon
-   font specifically for those elements.
+   also lands on Streamlit's icon fonts (e.g. header
+   icons), which replaces the glyph with literal
+   icon-name text. Restore the icon font specifically
+   for those elements.
    -------------------------------------------------- */
 [data-testid="stIconMaterial"],
-[data-testid="stSidebarCollapseButton"] span,
-[data-testid="stSidebarCollapsedControl"] span,
-[data-testid="collapsedControl"] span,
 span[class*="material-icons"],
 button[kind="header"] span {{
     font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
@@ -348,7 +384,7 @@ button[kind="header"] span {{
 /* --------------------------------------------------
    Fix: prevent text from different elements crowding
    or overlapping each other (headers, cards, chips,
-   sidebar nav labels).
+   nav labels).
    -------------------------------------------------- */
 .stApp p, .stApp span, .stApp div, .stApp label {{
     line-height: 1.55 !important;
@@ -384,14 +420,6 @@ button[kind="header"] span {{
 .chip {{
     white-space: nowrap;
     line-height: 1.4 !important;
-}}
-
-[data-testid="stSidebar"] .stButton > button {{
-    white-space: normal !important;
-    line-height: 1.35 !important;
-    text-align: left !important;
-    height: auto !important;
-    min-height: 2.5rem;
 }}
 
 [data-testid="stMetricLabel"], [data-testid="stMetricValue"] {{
@@ -1140,19 +1168,8 @@ def animate_score(final_score):
 
 
 # --------------------------------------------------
-# Sidebar
+# Top Navbar (replaces the old sidebar)
 # --------------------------------------------------
-st.sidebar.markdown(
-    f"""
-    <div style="text-align:center;padding:8px 0 22px 0;">
-        <img src="{LOGO_URL}" width="60" style="border-radius:16px;box-shadow:0 6px 16px {hex_to_rgba(C['title'], 0.30)};">
-        <div style="font-family:'Poppins',sans-serif;font-size:24px;font-weight:700;color:{C['title']} !important;margin-top:10px;">PulseGuard</div>
-        <div style="font-size:11px;letter-spacing:1.5px;color:{C['subtitle']} !important;text-transform:uppercase;margin-top:2px;">Heart Health Companion</div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
 NAV_ITEMS = [
     "🏠 Home",
     "❤️ Heart Dashboard",
@@ -1166,84 +1183,124 @@ NAV_ITEMS = [
 if "current_page" not in st.session_state:
     st.session_state.current_page = NAV_ITEMS[0]
 
-st.sidebar.markdown(
-    f"<div style='font-size:11px;letter-spacing:1.5px;color:{C['subtitle']};font-weight:700;margin:0 0 8px 2px;'>NAVIGATION</div>",
-    unsafe_allow_html=True
-)
+with st.container(border=True):
+    navbar_left, navbar_right = st.columns([3, 2])
+    with navbar_left:
+        st.markdown(
+            f"""
+            <div class="navbar-brand">
+                <img src="{LOGO_URL}" width="46" style="border-radius:12px;box-shadow:0 4px 12px {hex_to_rgba(C['title'], 0.30)};">
+                <div>
+                    <div class="navbar-title">PulseGuard</div>
+                    <div class="navbar-subtitle">Heart Health Companion</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with navbar_right:
+        _badge_col, _toggle_col = st.columns([2, 1])
+        with _badge_col:
+            st.markdown(
+                f"""
+                <div style="background:{hex_to_rgba(C['accent'], 0.15)};border:1px solid {C['accent']};
+                color:{C['accent']} !important;padding:8px 14px;border-radius:20px;text-align:center;
+                font-weight:600;font-size:13px;">
+                    🧪 Sprint 1 Prototype
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        with _toggle_col:
+            st.toggle("🌙 Dark", key="dark_mode")
 
-for _item in NAV_ITEMS:
-    _is_active = st.session_state.current_page == _item
-    if st.sidebar.button(_item, key=f"nav_{_item}", use_container_width=True,
-                          type="primary" if _is_active else "secondary"):
-        st.session_state.current_page = _item
-        st.rerun()
+    st.markdown('<div class="nav-row">', unsafe_allow_html=True)
+    _nav_cols = st.columns(len(NAV_ITEMS))
+    for _col, _item in zip(_nav_cols, NAV_ITEMS):
+        with _col:
+            _is_active = st.session_state.current_page == _item
+            if st.button(_item, key=f"nav_{_item}", use_container_width=True,
+                         type="primary" if _is_active else "secondary"):
+                st.session_state.current_page = _item
+                st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 page = st.session_state.current_page
 
-st.sidebar.markdown("---")
-st.sidebar.markdown(
-    f"""
-    <div style="background:{hex_to_rgba(C['accent'], 0.15)};border:1px solid {C['accent']};
-    color:{C['accent']} !important;padding:8px 14px;border-radius:20px;text-align:center;
-    font-weight:600;font-size:13px;margin-bottom:14px;">
-        🧪 Sprint 1 Prototype
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-st.sidebar.toggle("🌙 Dark Mode", key="dark_mode")
+# --------------------------------------------------
+# Device & Live Data Controls (collapsible, top of page)
+# --------------------------------------------------
+with st.expander("⚙️ Device & Live Data Controls", expanded=False):
+    st.caption(
+        "No real smartwatch is connected in this prototype. Pick a simulated device, "
+        "drag the sliders, simulate a random reading, or auto-play a scenario."
+    )
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("⌚ Choose Your Device")
-st.session_state.selected_watch = st.sidebar.selectbox(
-    "Simulated device",
-    list(WATCH_OPTIONS.keys()),
-    index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
-)
-_watch_color = WATCH_OPTIONS[st.session_state.selected_watch]
-watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
-st.sidebar.markdown(
-    f"""
-    <div class="device-card" style="border-top:5px solid {_watch_color};">
-        <div style="font-size:36px;">{st.session_state.selected_watch.split(" ")[0]}</div>
-        <div style="font-weight:700;">{watch_plain_name}</div>
-        <div style="font-size:12px;color:{C['subtitle']} !important;">Connected since {st.session_state.connected_since}</div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    device_col, action_col = st.columns([2, 1])
+    with device_col:
+        st.subheader("⌚ Choose Your Device")
+        st.session_state.selected_watch = st.selectbox(
+            "Simulated device",
+            list(WATCH_OPTIONS.keys()),
+            index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
+        )
+        _watch_color = WATCH_OPTIONS[st.session_state.selected_watch]
+        watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
+        st.markdown(
+            f"""
+            <div class="device-card" style="border-top:5px solid {_watch_color};text-align:left;padding:14px 18px;">
+                <div style="display:flex;align-items:center;gap:14px;">
+                    <div style="font-size:36px;">{st.session_state.selected_watch.split(" ")[0]}</div>
+                    <div>
+                        <div style="font-weight:700;">{watch_plain_name}</div>
+                        <div style="font-size:12px;color:{C['subtitle']} !important;">Connected since {st.session_state.connected_since}</div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🎛️ Live Demo Controls")
-st.sidebar.caption(
-    "No real smartwatch is connected in this prototype. "
-    "Drag these sliders, simulate a random reading, or auto-play a scenario."
-)
+    with action_col:
+        st.subheader("🎲 Quick Actions")
+        if st.button("🎲 Simulate New Reading", use_container_width=True):
+            st.session_state.heart_rate = random.randint(55, 130)
+            st.session_state.resting_hr = random.randint(45, 90)
+            st.session_state.hrv = random.randint(15, 90)
+            st.session_state.blood_pressure_variability = random.randint(0, 20)
+            st.session_state.heart_rate_recovery = random.randint(5, 40)
+            st.session_state.sleep_quality = random.randint(30, 100)
+            st.session_state.steps = random.randint(500, 15000)
+            st.session_state.battery = random.randint(10, 100)
+            st.session_state.tip_index = random.randint(0, len(TIPS) - 1)
 
-if st.sidebar.button("🎲 Simulate New Reading"):
-    st.session_state.heart_rate = random.randint(55, 130)
-    st.session_state.resting_hr = random.randint(45, 90)
-    st.session_state.hrv = random.randint(15, 90)
-    st.session_state.blood_pressure_variability = random.randint(0, 20)
-    st.session_state.heart_rate_recovery = random.randint(5, 40)
-    st.session_state.sleep_quality = random.randint(30, 100)
-    st.session_state.steps = random.randint(500, 15000)
-    st.session_state.battery = random.randint(10, 100)
-    st.session_state.tip_index = random.randint(0, len(TIPS) - 1)
+        st.session_state.autoplay = st.checkbox(
+            "▶️ Auto-Play Demo (cycles scenarios every few seconds)",
+            value=st.session_state.autoplay
+        )
 
-st.session_state.autoplay = st.sidebar.checkbox(
-    "▶️ Auto-Play Demo (cycles scenarios every few seconds)",
-    value=st.session_state.autoplay
-)
+    st.markdown("---")
+    st.subheader("🎛️ Live Metric Sliders")
 
-heart_rate = st.sidebar.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
-resting_hr = st.sidebar.slider("💓 Resting Heart Rate (BPM)", 30, 130, key="resting_hr")
-hrv = st.sidebar.slider("📊 Heart Rate Variability (ms)", 0, 150, key="hrv")
-blood_pressure_variability = st.sidebar.slider("🩺 Blood Pressure Variability (mmHg)", 0, 40, key="blood_pressure_variability")
-heart_rate_recovery = st.sidebar.slider("🏃 Heart Rate Recovery (BPM)", 0, 60, key="heart_rate_recovery")
-sleep_quality = st.sidebar.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
-steps = st.sidebar.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
-battery = st.sidebar.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
+    slider_row1 = st.columns(4)
+    with slider_row1[0]:
+        heart_rate = st.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
+    with slider_row1[1]:
+        resting_hr = st.slider("💓 Resting Heart Rate (BPM)", 30, 130, key="resting_hr")
+    with slider_row1[2]:
+        hrv = st.slider("📊 Heart Rate Variability (ms)", 0, 150, key="hrv")
+    with slider_row1[3]:
+        blood_pressure_variability = st.slider("🩺 Blood Pressure Variability (mmHg)", 0, 40, key="blood_pressure_variability")
+
+    slider_row2 = st.columns(4)
+    with slider_row2[0]:
+        heart_rate_recovery = st.slider("🏃 Heart Rate Recovery (BPM)", 0, 60, key="heart_rate_recovery")
+    with slider_row2[1]:
+        sleep_quality = st.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
+    with slider_row2[2]:
+        steps = st.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
+    with slider_row2[3]:
+        battery = st.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
 
 watch_connected = True
 last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
@@ -1546,7 +1603,7 @@ elif page == "📈 Health Summary":
 
     _prev_score = st.session_state.get("_prev_score", score)
     _prev_steps_goal = st.session_state.get("_prev_steps_goal_hit", steps >= 10000)
-    if score >= 90 and _prev_score < 90:
+    if score >= 75 and _prev_score < 75:
         st.balloons()
     if steps >= 10000 and not _prev_steps_goal:
         st.balloons()
