@@ -121,15 +121,20 @@ WATCH_OPTIONS = {
 # --------------------------------------------------
 if st.session_state.dark_mode:
     C = dict(
-        bg="#0f1115", card_bg="#1b1e24", text="#e8e8e8", subtitle="#a8a8a8",
-        title="#ff6b6b", border="#2a2d33", chip_bg_alpha="33",
+        bg="#0c141f", card_bg="#152232", text="#eaf1f8", subtitle="#9fb3c8",
+        title="#5B9BD9", accent="#3AAFA9", gold="#E3A857",
+        border="#22334a", chip_bg_alpha="33",
     )
 else:
     C = dict(
-        bg="#f8f9fa", card_bg="#ffffff", text="#222222", subtitle="#555555",
-        title="#c62828", border="#e5e5e5", chip_bg_alpha="22",
+        bg="#f2f6fa", card_bg="#ffffff", text="#16283c", subtitle="#5b6b7c",
+        title="#1B3A5C", accent="#2E8B84", gold="#D9973F",
+        border="#e1e8f0", chip_bg_alpha="22",
     )
 
+# GOOD/WARN/DANGER stay reserved for genuine health-status signals (green/amber/red)
+# so alerts remain instantly recognizable — the brand identity itself uses the
+# navy/teal/gold palette above instead of red, to keep the app feeling calm and safe.
 GOOD, WARN, DANGER = "#2e7d32", "#f9a825", "#c62828"
 
 
@@ -155,9 +160,17 @@ def score_color(score):
 st.markdown(f"""
 <style>
 
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+
 .stApp, .stApp *,
 section[data-testid="stSidebar"], section[data-testid="stSidebar"] * {{
     color:{C['text']} !important;
+    font-family: 'Inter', -apple-system, sans-serif;
+}}
+
+h1, h2, h3, .main-title, [data-testid="stMarkdownContainer"] h1,
+[data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3 {{
+    font-family: 'Poppins', -apple-system, sans-serif !important;
 }}
 
 .stApp {{
@@ -170,7 +183,7 @@ section[data-testid="stSidebar"] {{
 
 .main-title{{
     font-size:46px;
-    font-weight:bold;
+    font-weight:700;
     color:{C['title']} !important;
 }}
 
@@ -181,16 +194,16 @@ section[data-testid="stSidebar"] {{
 
 .metric-card{{
     background:{C['card_bg']};
-    border-radius:15px;
+    border-radius:18px;
     padding:20px;
-    box-shadow:0px 3px 8px rgba(0,0,0,.12);
+    box-shadow:0px 4px 14px {hex_to_rgba(C['title'], 0.10)};
     margin-bottom:15px;
     transition: transform 0.15s ease, box-shadow 0.15s ease;
 }}
 
 .metric-card:hover{{
     transform: translateY(-4px);
-    box-shadow:0px 8px 18px rgba(0,0,0,.18);
+    box-shadow:0px 10px 24px {hex_to_rgba(C['title'], 0.16)};
 }}
 
 .metric-title{{
@@ -208,28 +221,30 @@ section[data-testid="stSidebar"] {{
     display:inline-block;
     padding:5px 14px;
     border-radius:20px;
+
     font-size:13px;
     font-weight:600;
     margin:4px 6px 4px 0;
 }}
 
 .hero-banner{{
-    background: linear-gradient(135deg, {C['title']}22, {C['card_bg']});
-    border-radius:20px;
+    background: linear-gradient(135deg, {hex_to_rgba(C['title'], 0.16)}, {hex_to_rgba(C['accent'], 0.10)});
+    border-radius:22px;
     padding:28px 32px;
     margin-bottom:20px;
     display:flex;
     align-items:center;
     gap:20px;
+    border: 1px solid {hex_to_rgba(C['title'], 0.15)};
 }}
 
 .device-card{{
     background:{C['card_bg']};
-    border-radius:14px;
+    border-radius:16px;
     padding:14px;
     text-align:center;
     margin-top:10px;
-    box-shadow:0px 2px 6px rgba(0,0,0,.10);
+    box-shadow:0px 3px 10px {hex_to_rgba(C['title'], 0.10)};
 }}
 
 .device-card small, .device-sub {{
@@ -661,7 +676,7 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     content_width = pdf.w - pdf.l_margin - pdf.r_margin
 
     pdf.set_font("Helvetica", "B", 22)
-    pdf.set_text_color(198, 40, 40)
+    pdf.set_text_color(27, 58, 92)
     pdf.cell(content_width, 12, _pdf_safe("PulseGuard Health Report"), ln=True)
 
     pdf.set_font("Helvetica", "", 10)
