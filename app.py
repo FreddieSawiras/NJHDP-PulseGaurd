@@ -56,7 +56,6 @@ if "trend_data" not in st.session_state:
         "steps": [random.randint(4000, 9000) for _ in range(6)],
     }
 
-
 if "full_history" not in st.session_state:
     _history = {}
     for _i in range(14, 0, -1):
@@ -496,43 +495,47 @@ def render_ecg_animation(hr):
 
 
 def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
-                             sleep_quality=None, steps=None, heart_rate_recovery=None):
+                             sleep_quality=None, steps=None, heart_rate_recovery=None,
+                             blood_pressure_variability=None):
     heart_rate = st.session_state.heart_rate if heart_rate is None else heart_rate
     resting_hr = st.session_state.resting_hr if resting_hr is None else resting_hr
     hrv = st.session_state.hrv if hrv is None else hrv
     sleep_quality = st.session_state.sleep_quality if sleep_quality is None else sleep_quality
     steps = st.session_state.steps if steps is None else steps
     heart_rate_recovery = st.session_state.heart_rate_recovery if heart_rate_recovery is None else heart_rate_recovery
+    blood_pressure_variability = (
+        st.session_state.blood_pressure_variability
+        if blood_pressure_variability is None else blood_pressure_variability
+    )
 
-    score = 100
     positives = []
     concerns = []
 
     if 60 <= heart_rate <= 100:
         positives.append("Your heart rate is within the expected resting range.")
     else:
-        score -= 10
         concerns.append("Your heart rate is outside the expected resting range.")
 
     if 50 <= resting_hr <= 80:
         positives.append("Your resting heart rate looks healthy.")
     else:
-        score -= 5
         concerns.append("Your resting heart rate may be unusual.")
 
     if hrv >= 50:
         positives.append("Your heart rate variability is strong.")
     else:
-        score -= 8
         concerns.append("Your heart rate variability is lower than normal.")
+
+    if blood_pressure_variability <= 10:
+        positives.append("Your blood pressure variability is within a typical range.")
+    else:
+        concerns.append("Your blood pressure variability is higher than typical.")
 
     if sleep_quality >= 80:
         positives.append("Excellent sleep quality.")
     elif sleep_quality >= 60:
-        score -= 3
         concerns.append("Your sleep quality could improve.")
     else:
-        score -= 8
         concerns.append("Poor sleep quality detected.")
 
     if steps >= 10000:
@@ -540,16 +543,27 @@ def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
     elif steps >= 7500:
         positives.append("You stayed fairly active today.")
     else:
-        score -= 7
         concerns.append("Try increasing your daily activity.")
 
     if heart_rate_recovery >= 20:
         positives.append("Heart rate recovery looks healthy.")
     else:
-        score -= 5
         concerns.append("Heart rate recovery is slower than expected.")
 
-    score = max(score, 0)
+    # Overall score is the average of each metric's own 0-100 health score
+    # (the same scores driving the radar chart), so one bad metric genuinely
+    # moves the needle instead of a small fixed-point deduction.
+    metric_scores = [
+        metric_status("heart_rate", heart_rate)[2],
+        metric_status("resting_hr", resting_hr)[2],
+        metric_status("hrv", hrv)[2],
+        metric_status("bp_variability", blood_pressure_variability)[2],
+        metric_status("recovery", heart_rate_recovery)[2],
+        metric_status("sleep", sleep_quality)[2],
+        metric_status("steps", steps)[2],
+    ]
+    score = round(sum(metric_scores) / len(metric_scores))
+    score = max(0, min(100, score))
     return score, positives, concerns
 
 
@@ -586,7 +600,8 @@ def compute_streak(today_score):
         day_score, _, _ = generate_health_summary(
             heart_rate=day["heart_rate"], resting_hr=day["resting_hr"], hrv=day["hrv"],
             sleep_quality=day["sleep_quality"], steps=day["steps"],
-            heart_rate_recovery=day["heart_rate_recovery"]
+            heart_rate_recovery=day["heart_rate_recovery"],
+            blood_pressure_variability=day["blood_pressure_variability"]
         )
         if day_score >= 75:
             streak += 1
@@ -643,14 +658,15 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
+    content_width = pdf.w - pdf.l_margin - pdf.r_margin
 
     pdf.set_font("Helvetica", "B", 22)
     pdf.set_text_color(198, 40, 40)
-    pdf.cell(0, 12, _pdf_safe("PulseGuard Health Report"), ln=True)
+    pdf.cell(content_width, 12, _pdf_safe("PulseGuard Health Report"), ln=True)
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(90, 90, 90)
-    pdf.cell(0, 6, _pdf_safe(f"Generated {last_sync} ET  |  Device: {watch_name}"), ln=True)
+    pdf.cell(content_width, 6, _pdf_safe(f"Generated {last_sync} ET  |  Device: {watch_name}"), ln=True)
     pdf.ln(4)
 
     if score >= 90:
@@ -662,12 +678,12 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
 
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(*score_rgb)
-    pdf.cell(0, 10, _pdf_safe(f"Heart Health Score: {score}/100"), ln=True)
+    pdf.cell(content_width, 10, _pdf_safe(f"Heart Health Score: {score}/100"), ln=True)
     pdf.ln(2)
 
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 8, "Today's Metrics", ln=True)
+    pdf.cell(content_width, 8, "Today's Metrics", ln=True)
     pdf.set_font("Helvetica", "", 11)
 
     rows = [
@@ -680,43 +696,49 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
         ("Daily Steps", f"{steps:,}"),
         ("Watch Battery", f"{battery}%"),
     ]
+    label_width = 90
+    value_width = content_width - label_width
     for label, value in rows:
         pdf.set_fill_color(245, 245, 245)
-        pdf.cell(90, 8, _pdf_safe(label), border=0, fill=True)
-        pdf.cell(0, 8, _pdf_safe(value), border=0, fill=True, ln=True)
+        pdf.cell(label_width, 8, _pdf_safe(label), border=0, fill=True)
+        pdf.cell(value_width, 8, _pdf_safe(value), border=0, fill=True, ln=True)
 
     pdf.ln(4)
 
     if positives:
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(46, 125, 50)
-        pdf.cell(0, 8, "What's Going Well", ln=True)
+        pdf.cell(content_width, 8, "What's Going Well", ln=True)
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(20, 20, 20)
         for p in positives:
-            pdf.multi_cell(0, 6, _pdf_safe(f"- {p}"))
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(content_width, 6, _pdf_safe(f"- {p}"))
         pdf.ln(2)
 
     if concerns:
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(198, 40, 40)
-        pdf.cell(0, 8, "Areas to Watch", ln=True)
+        pdf.cell(content_width, 8, "Areas to Watch", ln=True)
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(20, 20, 20)
         for c in concerns:
-            pdf.multi_cell(0, 6, _pdf_safe(f"- {c}"))
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(content_width, 6, _pdf_safe(f"- {c}"))
         pdf.ln(2)
 
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(0, 8, "AI-Generated Insight", ln=True)
+    pdf.cell(content_width, 8, "AI-Generated Insight", ln=True)
     pdf.set_font("Helvetica", "", 11)
-    pdf.multi_cell(0, 6, _pdf_safe(ai_insight))
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(content_width, 6, _pdf_safe(ai_insight))
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "I", 9)
     pdf.set_text_color(120, 120, 120)
-    pdf.multi_cell(0, 5, _pdf_safe(
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(content_width, 5, _pdf_safe(
         "This report is generated by an educational prototype and is not a medical diagnosis. "
         "It is not intended to replace professional medical advice. Consult a qualified "
         "healthcare provider regarding any concerns."
@@ -1242,7 +1264,8 @@ elif page == "📈 Health Summary":
         _day_score, _day_positives, _day_concerns = generate_health_summary(
             heart_rate=_day["heart_rate"], resting_hr=_day["resting_hr"], hrv=_day["hrv"],
             sleep_quality=_day["sleep_quality"], steps=_day["steps"],
-            heart_rate_recovery=_day["heart_rate_recovery"]
+            heart_rate_recovery=_day["heart_rate_recovery"],
+            blood_pressure_variability=_day["blood_pressure_variability"]
         )
         dcol1, dcol2, dcol3, dcol4 = st.columns(4)
         with dcol1:
