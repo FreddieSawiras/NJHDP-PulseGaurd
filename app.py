@@ -72,6 +72,14 @@ if "full_history" not in st.session_state:
         }
     st.session_state.full_history = _history
 
+if "activity_feed" not in st.session_state:
+    st.session_state.activity_feed = [
+        {"time": "10m ago", "event": "Telemetry synced from Apple Watch"},
+        {"time": "1h ago", "event": "HRV baseline updated (+4 ms)"},
+        {"time": "3h ago", "event": "Resting Heart Rate logged at 61 BPM"},
+        {"time": "5h ago", "event": "Sleep analysis processed: 86% Quality"},
+    ]
+
 TIPS = [
     "💧 Staying hydrated helps regulate heart rate and blood pressure.",
     "😴 7-9 hours of consistent sleep supports a healthy heart rhythm.",
@@ -197,6 +205,28 @@ section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-
 .metric-card-wrapper:hover {
     transform: translateY(-2px);
     border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Pill Navigation Fixed Height Lock */
+div[data-testid="column"] button.st-emotion-cache-121bf26,
+div[data-testid="column"] button {
+    height: 46px !important;
+    max-height: 46px !important;
+    min-height: 46px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 12px !important;
+}
+
+div[data-testid="column"] button p {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    margin: 0 !important;
 }
 
 /* Pill-style Tabs (AquaPure-inspired) */
@@ -470,12 +500,15 @@ def metric_status(kind, value):
             return "Concern", DANGER, pct
     return "Good", GOOD, 100
 
-def render_metric_card(title, value_str, color):
+def render_metric_card(title, value_str, color, trend_str="+4 vs yesterday"):
     st.markdown(
         f"""
         <div class="metric-card-wrapper" style="border-top: 3px solid {color};">
             <div class="metric-title">{title}</div>
             <div class="metric-value">{value_str}</div>
+            <div style="font-size: 11px; color: #8A99AD; margin-top: 6px; display: flex; align-items: center; gap: 4px;">
+                <span style="color:{color}; font-weight:700;">↑</span> {trend_str}
+            </div>
             <div style="position: absolute; top: 18px; right: 18px; width: 8px; height: 8px; border-radius: 50%; background: {color}; box-shadow: 0 0 10px {color};"></div>
         </div>
         """,
@@ -516,6 +549,29 @@ def render_score_gauge(score):
         margin=dict(l=20, r=20, t=30, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         font_color="#FFFFFF",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_streak_ring(streak_count=5):
+    fig = go.Figure(go.Pie(
+        values=[streak_count, max(1, 10 - streak_count)],
+        hole=0.75,
+        sort=False,
+        direction="clockwise",
+        showlegend=False,
+        textinfo="none",
+        marker=dict(colors=["#00E5FF", "rgba(255,255,255,0.05)"])
+    ))
+    fig.add_annotation(
+        text=f"<b>{streak_count}</b><br><span style='font-size:10px;color:#8A99AD;'>DAYS</span>",
+        x=0.5, y=0.5, showarrow=False,
+        font=dict(size=18, color="#FFFFFF", family="Plus Jakarta Sans")
+    )
+    fig.update_layout(
+        height=140,
+        width=140,
+        margin=dict(l=0, r=0, t=0, b=0),
+        paper_bgcolor="rgba(0,0,0,0)"
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -639,9 +695,6 @@ def render_heart_structure_reference():
             )
 
 def render_3d_heart(hr=72):
-    # Points at the real heart model file in your GitHub repo, served via jsDelivr's CDN
-    # (works instantly for any public repo, no server setup needed).
-    # If you use a different branch than "main" or a different repo/file path, change this line.
     MODEL_URL = "https://cdn.jsdelivr.net/gh/FreddieSawiras/NJHDP-PulseGaurd@main/assets/scene.gltf"
 
     html_code = f"""
@@ -705,7 +758,6 @@ def render_3d_heart(hr=72):
             controls.minDistance = 3;
             controls.maxDistance = 16;
 
-            // ---------- Lighting ----------
             const ambientLight = new THREE.AmbientLight(0xffffff, 1.1);
             scene.add(ambientLight);
 
@@ -731,8 +783,6 @@ def render_3d_heart(hr=72):
             let modelMesh = null;
             const hotspotMeshes = [];
 
-            // Hotspots are defined as FRACTIONS of the model's own bounding box (0 = min edge, 1 = max edge),
-            // so they land in roughly the right place no matter what heart model you drop in.
             const hotspotFractions = [
                 {{ fx: 0.50, fy: 0.92, fz: 0.55, title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation." }},
                 {{ fx: 0.68, fy: 0.30, fz: 0.62, title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body." }},
@@ -772,7 +822,6 @@ def render_3d_heart(hr=72):
                 document.getElementById('loading').style.display = 'none';
             }}
 
-            // ---------- Fallback: procedural heart shape (used only if the real model can't load) ----------
             function buildFallbackHeart() {{
                 const shape = new THREE.Shape();
                 const x = 0, y = 0;
@@ -802,14 +851,11 @@ def render_3d_heart(hr=72):
                 document.getElementById('hud').innerText = "HEART // STYLIZED FALLBACK";
             }}
 
-            // ---------- Load the real anatomical model ----------
             const loader = new THREE.GLTFLoader();
             loader.load(
                 "{MODEL_URL}",
                 function (gltf) {{
                     const model = gltf.scene;
-
-                    // Auto-center and auto-scale so it fills the view nicely regardless of the source model's units.
                     const rawBox = new THREE.Box3().setFromObject(model);
                     const center = rawBox.getCenter(new THREE.Vector3());
                     const size = rawBox.getSize(new THREE.Vector3());
@@ -842,7 +888,6 @@ def render_3d_heart(hr=72):
                 }}
             );
 
-            // ---------- Raycasting for interactivity ----------
             const raycaster = new THREE.Raycaster();
             const mouse = new THREE.Vector2();
             const infoBox = document.getElementById('infoBox');
@@ -874,7 +919,6 @@ def render_3d_heart(hr=72):
                 if (e.touches.length > 0) updatePointer(e.touches[0].clientX, e.touches[0].clientY);
             }}, {{ passive: true }});
 
-            // ---------- Heartbeat pulse animation (speed follows live BPM) ----------
             const clock = new THREE.Clock();
             const bpm = {hr};
             const beatFreq = Math.max(0.4, bpm / 60);
@@ -1488,29 +1532,31 @@ if page == "🏠 Home":
 
     _today_score, _today_positives, _today_concerns = generate_health_summary()
     _score_color = score_color(_today_score)
+    _streak = compute_streak(_today_score)
 
-    # Hero Banner Design
+    current_hour = datetime.now(ZoneInfo("America/New_York")).hour
+    time_greeting = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 18 else "Good evening")
+
+    # Hero Section
     st.markdown(
         f"""
-        <div class="glass-card" style="padding:40px; margin-bottom:24px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.9) 0%, rgba(8, 17, 31, 0.95) 100%);">
+        <div class="glass-card" style="padding:32px; margin-bottom:24px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.9) 0%, rgba(8, 17, 31, 0.95) 100%);">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:20px;">
-                <div style="max-width:650px;">
-                    <div style="display:inline-block; padding:4px 12px; border-radius:20px; background:rgba(0,229,255,0.1); border:1px solid rgba(0,229,255,0.3); color:#00E5FF; font-size:12px; font-weight:700; margin-bottom:12px;">
-                        NEXT-GEN CARDIOVASCULAR INTELLIGENCE
+                <div>
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                        <span style="font-size:24px;">{time_greeting}!</span>
+                        <div style="display:flex; align-items:center; gap:6px; background:rgba(0, 229, 255, 0.1); border:1px solid rgba(0, 229, 255, 0.3); padding:4px 12px; border-radius:20px;">
+                            <div class="pulse-dot"></div>
+                            <span style="font-size:12px; font-weight:700; color:#00E5FF;">{heart_rate} BPM LIVE</span>
+                        </div>
                     </div>
-                    <h1 style="font-size:42px; font-weight:800; letter-spacing:-0.03em; margin:0 0 12px 0; background:linear-gradient(135deg, #FFFFFF 40%, #8A99AD 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
-                        Protect Your Heart Before It Warns You.
-                    </h1>
-                    <p style="font-size:16px; color:#8A99AD; margin:0; line-height:1.6;">
-                        Continuous wearable telemetric analysis detecting real-time cardiovascular shifts, recovery states, and stress indexes.
-                    </p>
+                    <h2 style="font-size:28px; font-weight:800; margin:0 0 8px 0; color:#FFFFFF;">Your heart's looking steady today.</h2>
+                    <p style="font-size:14px; color:#8A99AD; margin:0;">Wearable telemetry actively monitoring cardiovascular dynamics and autonomic stability.</p>
                 </div>
-                <div style="text-align:center; background:rgba(8, 17, 31, 0.8); border:2px solid {hex_to_rgba(_score_color, 0.5)}; border-radius:24px; padding:24px 36px; box-shadow:0 0 30px {hex_to_rgba(_score_color, 0.2)};">
-                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8A99AD;">Cardiovascular Health Score</div>
-                    <div style="font-size:52px; font-weight:800; color:{_score_color}; line-height:1; margin:8px 0;">
-                        {_today_score}
-                    </div>
-                    <span style="font-size:12px; font-weight:600; color:#8A99AD;">OUT OF 100</span>
+                <div style="text-align:center; background:rgba(8, 17, 31, 0.8); border:1px solid rgba(255, 255, 255, 0.1); border-radius:20px; padding:16px 28px;">
+                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8A99AD;">Daily Score</div>
+                    <div style="font-size:42px; font-weight:800; color:{_score_color}; margin:2px 0;">{_today_score}</div>
+                    <span style="font-size:11px; font-weight:600; color:#8A99AD;">/ 100</span>
                 </div>
             </div>
         </div>
@@ -1518,57 +1564,122 @@ if page == "🏠 Home":
         unsafe_allow_html=True
     )
 
-    tip_col, streak_col = st.columns([2, 1])
-    with tip_col:
+    # Today's Focus Card & Goal Ring
+    focus_col, ring_col = st.columns([2, 1])
+    with focus_col:
         st.markdown(
             f"""
-            <div class="glass-card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
-                <div style="font-size:20px;">💡</div>
-                <div style="font-size:13.5px; color:#E2E8F0;">
-                    <strong style="color:#00E5FF;">Daily Insight:</strong> {TIPS[st.session_state.tip_index]}
+            <div class="glass-card" style="border-left:4px solid #00E5FF; padding:20px; height: 100%;">
+                <div style="font-size:12px; font-weight:700; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">🎯 Today's Focus Action</div>
+                <div style="font-size:16px; font-weight:700; color:#FFFFFF; margin-bottom:6px;">Your HRV dipped 12% from your weekly average</div>
+                <div style="font-size:13.5px; color:#8A99AD; line-height:1.5;">
+                    A short walk or some deep breathing could help lower autonomic strain and boost recovery.
                 </div>
             </div>
             """,
             unsafe_allow_html=True
         )
-    with streak_col:
-        _streak = compute_streak(_today_score)
+    with ring_col:
         st.markdown(
             f"""
-            <div class="glass-card" style="padding:16px 20px; text-align:center;">
-                <span style="font-size:14px; font-weight:700; color:#FFB703;">🔥 {_streak}-Day Optimal Health Streak</span>
-            </div>
+            <div class="glass-card" style="padding:12px; text-align:center; display:flex; align-items:center; justify-content:space-around;">
+                <div>
+                    <div style="font-size:11px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.05em;">Optimal Health Streak</div>
+                    <div style="font-size:13px; font-weight:600; color:#00E5FF; margin-top:4px;">🔥 Active Routine</div>
+                </div>
             """,
             unsafe_allow_html=True
         )
+        render_streak_ring(_streak)
+        st.markdown('</div>', unsafe_allow_html=True)
 
+    # Quick Actions Row
     st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
-    st.subheader("📊 Vital Statistics")
+    st.subheader("⚡ Quick Actions")
+    qa_col1, qa_col2, qa_col3 = st.columns(3)
+    with qa_col1:
+        if st.button("🎲 Simulate Reading", use_container_width=True):
+            st.session_state.heart_rate = random.randint(55, 130)
+            st.session_state.resting_hr = random.randint(45, 90)
+            st.session_state.hrv = random.randint(15, 90)
+            st.session_state.blood_pressure_variability = random.randint(0, 20)
+            st.session_state.heart_rate_recovery = random.randint(5, 40)
+            st.session_state.sleep_quality = random.randint(30, 100)
+            st.session_state.steps = random.randint(500, 15000)
+            st.session_state.activity_feed.insert(0, {"time": "Just now", "event": "Simulated new telemetric reading"})
+            st.rerun()
+    with qa_col2:
+        if st.button("📊 View Full Report", use_container_width=True):
+            st.session_state.current_page = "📈 Health Summary"
+            st.rerun()
+    with qa_col3:
+        if st.button("🤖 Ask AI Assistant", use_container_width=True):
+            st.session_state.current_page = "🤖 AI Assistant"
+            st.rerun()
+
+    # Stat Cards with Trend Arrows
+    st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+    st.subheader("📊 Vital Statistics & Trends")
 
     snap_row1 = st.columns(4)
     snap_items = [
-        ("❤️ Heart Rate", f"{heart_rate} BPM", "heart_rate", heart_rate),
-        ("💓 Resting HR", f"{resting_hr} BPM", "resting_hr", resting_hr),
-        ("📊 HRV", f"{hrv} ms", "hrv", hrv),
-        ("🩺 BP Var", f"{blood_pressure_variability} mmHg", "bp_variability", blood_pressure_variability),
+        ("❤️ Heart Rate", f"{heart_rate} BPM", "heart_rate", heart_rate, "+2 vs yesterday"),
+        ("💓 Resting HR", f"{resting_hr} BPM", "resting_hr", resting_hr, "-1 vs yesterday"),
+        ("📊 HRV", f"{hrv} ms", "hrv", hrv, "+5 vs yesterday"),
+        ("🩺 BP Var", f"{blood_pressure_variability} mmHg", "bp_variability", blood_pressure_variability, "Stable"),
     ]
-    for _col, (_title, _val, _kind, _raw) in zip(snap_row1, snap_items):
+    for _col, (_title, _val, _kind, _raw, _trend) in zip(snap_row1, snap_items):
         with _col:
             _, _color, _ = metric_status(_kind, _raw)
-            render_metric_card(_title, _val, _color)
+            render_metric_card(_title, _val, _color, _trend)
 
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
     snap_row2 = st.columns(3)
     snap_items2 = [
-        ("🏃 Recovery", f"{heart_rate_recovery} BPM", "recovery", heart_rate_recovery),
-        ("😴 Sleep Quality", f"{sleep_quality}%", "sleep", sleep_quality),
-        ("👟 Daily Steps", f"{steps:,}", "steps", steps),
+        ("🏃 Recovery", f"{heart_rate_recovery} BPM", "recovery", heart_rate_recovery, "+3 vs yesterday"),
+        ("😴 Sleep Quality", f"{sleep_quality}%", "sleep", sleep_quality, "+4% vs yesterday"),
+        ("👟 Daily Steps", f"{steps:,}", "steps", steps, "+1,200 vs yesterday"),
     ]
-    for _col, (_title, _val, _kind, _raw) in zip(snap_row2, snap_items2):
+    for _col, (_title, _val, _kind, _raw, _trend) in zip(snap_row2, snap_items2):
         with _col:
             _, _color, _ = metric_status(_kind, _raw)
-            render_metric_card(_title, _val, _color)
+            render_metric_card(_title, _val, _color, _trend)
 
+    # Activity Feed & Comparison Framing
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+    feed_col, compare_col = st.columns([3, 2])
+    with feed_col:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("⏱️ Recent Activity Feed")
+        for act in st.session_state.activity_feed[:4]:
+            st.markdown(
+                f"""
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <span style="font-size:13px; color:#F0F4F8;">● {act['event']}</span>
+                    <span style="font-size:11px; color:#8A99AD; font-family:'JetBrains Mono', monospace;">{act['time']}</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with compare_col:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("👥 Population Context")
+        st.markdown(
+            f"""
+            <div style="font-size:14px; color:#8A99AD; line-height:1.6; margin-top:8px;">
+                Your resting HR (<strong style="color:#00E5FF;">{resting_hr} BPM</strong>) is lower and more efficient than <strong style="color:#00E5FF;">72%</strong> of individuals in your age bracket.
+            </div>
+            <div style="margin-top:14px; font-size:12px; color:#8A99AD;">
+                💡 Keep maintaining active aerobic recovery to sustain this optimal band.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Performance Charts
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
     viz_col, radar_col = st.columns([3, 2])
     with viz_col:
