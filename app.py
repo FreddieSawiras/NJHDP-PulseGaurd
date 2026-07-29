@@ -551,6 +551,11 @@ def render_ecg_animation(hr):
     components.html(html_code, height=155)
 
 def render_3d_heart(hr=72):
+    # Points at the real heart model file in your GitHub repo, served via jsDelivr's CDN
+    # (works instantly for any public repo, no server setup needed).
+    # If you use a different branch than "main" or a different repo/file path, change this line.
+    MODEL_URL = "https://cdn.jsdelivr.net/gh/FreddieSawiras/NJHDP-PulseGaurd@main/assets/scene.gltf"
+
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -571,7 +576,7 @@ def render_3d_heart(hr=72):
             #loading {{
                 position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
                 color: #00E5FF; font-size: 13px; font-weight: 700; letter-spacing: 0.05em;
-                z-index: 5;
+                z-index: 5; text-align: center; width: 80%;
             }}
             #hud {{
                 position: absolute; top: 14px; left: 16px;
@@ -586,10 +591,11 @@ def render_3d_heart(hr=72):
         </style>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     </head>
     <body>
         <div id="container">
-            <div id="loading">⚡ BUILDING 3D ANATOMICAL MODEL...</div>
+            <div id="loading">⚡ LOADING 3D ANATOMICAL MODEL...</div>
             <div id="hud">HEART // INTERACTIVE MODEL</div>
             <div id="bpmTag">❤️ {hr} BPM</div>
             <div id="infoBox">💡 Drag to rotate • Scroll to zoom • Hover glowing nodes for details</div>
@@ -608,14 +614,14 @@ def render_3d_heart(hr=72):
             const controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.06;
-            controls.minDistance = 4;
-            controls.maxDistance = 14;
+            controls.minDistance = 3;
+            controls.maxDistance = 16;
 
             // ---------- Lighting ----------
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.1);
             scene.add(ambientLight);
 
-            const keyLight = new THREE.DirectionalLight(0xffffff, 1.4);
+            const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
             keyLight.position.set(5, 8, 6);
             scene.add(keyLight);
 
@@ -634,10 +640,52 @@ def render_3d_heart(hr=72):
             const heartGroup = new THREE.Group();
             scene.add(heartGroup);
 
-            // ---------- Procedural anatomical heart shape ----------
-            // Built from a heart-curve cross section, extruded and beveled for a
-            // realistic rounded muscular silhouette (no external model download needed).
-            function buildHeartGeometry() {{
+            let modelMesh = null;
+            const hotspotMeshes = [];
+
+            // Hotspots are defined as FRACTIONS of the model's own bounding box (0 = min edge, 1 = max edge),
+            // so they land in roughly the right place no matter what heart model you drop in.
+            const hotspotFractions = [
+                {{ fx: 0.50, fy: 0.92, fz: 0.55, title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation." }},
+                {{ fx: 0.68, fy: 0.30, fz: 0.62, title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body." }},
+                {{ fx: 0.22, fy: 0.68, fz: 0.55, title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from systemic veins." }},
+                {{ fx: 0.55, fy: 0.55, fz: 0.85, title: "CORONARY ARTERY", desc: "Supplies oxygenated blood directly to cardiac tissue." }},
+                {{ fx: 0.32, fy: 0.28, fz: 0.60, title: "RIGHT VENTRICLE", desc: "Pumps deoxygenated blood to the lungs via the pulmonary artery." }}
+            ];
+
+            function addHotspots(box) {{
+                const hotspotGeo = new THREE.SphereGeometry(box.getSize(new THREE.Vector3()).length() * 0.02, 16, 16);
+                const hotspotMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff }});
+
+                hotspotFractions.forEach(data => {{
+                    const pos = new THREE.Vector3(
+                        THREE.MathUtils.lerp(box.min.x, box.max.x, data.fx),
+                        THREE.MathUtils.lerp(box.min.y, box.max.y, data.fy),
+                        THREE.MathUtils.lerp(box.min.z, box.max.z, data.fz)
+                    );
+                    const mesh = new THREE.Mesh(hotspotGeo, hotspotMat.clone());
+                    mesh.position.copy(pos);
+                    mesh.userData = data;
+                    heartGroup.add(mesh);
+                    hotspotMeshes.push(mesh);
+
+                    const ringSize = box.getSize(new THREE.Vector3()).length() * 0.03;
+                    const ringGeo = new THREE.RingGeometry(ringSize, ringSize * 1.25, 24);
+                    const ringMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide }});
+                    const ring = new THREE.Mesh(ringGeo, ringMat);
+                    ring.position.copy(pos);
+                    ring.lookAt(camera.position);
+                    heartGroup.add(ring);
+                    mesh.userData.ring = ring;
+                }});
+            }}
+
+            function finishLoading() {{
+                document.getElementById('loading').style.display = 'none';
+            }}
+
+            // ---------- Fallback: procedural heart shape (used only if the real model can't load) ----------
+            function buildFallbackHeart() {{
                 const shape = new THREE.Shape();
                 const x = 0, y = 0;
                 shape.moveTo(x, y + 0.7);
@@ -645,91 +693,66 @@ def render_3d_heart(hr=72):
                 shape.bezierCurveTo(x - 1.1, y - 0.15, x - 0.55, y - 0.85, x, y - 1.6);
                 shape.bezierCurveTo(x + 0.55, y - 0.85, x + 1.1, y - 0.15, x + 1.1, y + 0.55);
                 shape.bezierCurveTo(x + 1.1, y + 1.3, x, y + 1.1, x, y + 0.7);
-
-                const extrudeSettings = {{
-                    steps: 4,
-                    depth: 1.1,
-                    bevelEnabled: true,
-                    bevelThickness: 0.35,
-                    bevelSize: 0.35,
-                    bevelOffset: 0,
-                    bevelSegments: 12,
-                    curveSegments: 24
-                }};
-
-                const geo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                const geo = new THREE.ExtrudeGeometry(shape, {{
+                    steps: 4, depth: 1.1, bevelEnabled: true, bevelThickness: 0.35,
+                    bevelSize: 0.35, bevelOffset: 0, bevelSegments: 12, curveSegments: 24
+                }});
                 geo.center();
                 geo.computeVertexNormals();
-                return geo;
+                const mat = new THREE.MeshPhysicalMaterial({{
+                    color: 0xb5121b, roughness: 0.35, metalness: 0.05,
+                    clearcoat: 0.6, clearcoatRoughness: 0.3, sheen: 1.0,
+                    sheenColor: new THREE.Color(0xff4d6d), emissive: 0x2a0508, emissiveIntensity: 0.4
+                }});
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.rotation.x = Math.PI;
+                heartGroup.add(mesh);
+                modelMesh = mesh;
+                const box = new THREE.Box3().setFromObject(mesh);
+                addHotspots(box);
+                finishLoading();
+                document.getElementById('hud').innerText = "HEART // STYLIZED FALLBACK";
             }}
 
-            const heartMat = new THREE.MeshPhysicalMaterial({{
-                color: 0xb5121b,
-                roughness: 0.35,
-                metalness: 0.05,
-                clearcoat: 0.6,
-                clearcoatRoughness: 0.3,
-                sheen: 1.0,
-                sheenColor: new THREE.Color(0xff4d6d),
-                emissive: 0x2a0508,
-                emissiveIntensity: 0.4
-            }});
+            // ---------- Load the real anatomical model ----------
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                "{MODEL_URL}",
+                function (gltf) {{
+                    const model = gltf.scene;
 
-            const heartMesh = new THREE.Mesh(buildHeartGeometry(), heartMat);
-            heartMesh.rotation.x = Math.PI; // point downward, like an anatomical heart
-            heartMesh.scale.set(1.15, 1.15, 1.0);
-            heartGroup.add(heartMesh);
+                    // Auto-center and auto-scale so it fills the view nicely regardless of the source model's units.
+                    const rawBox = new THREE.Box3().setFromObject(model);
+                    const center = rawBox.getCenter(new THREE.Vector3());
+                    const size = rawBox.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+                    const scale = 3.4 / maxDim;
 
-            // Subtle wireframe overlay for a "scan" feel
-            const wireMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff, wireframe: true, transparent: true, opacity: 0.08 }});
-            const wireMesh = new THREE.Mesh(heartMesh.geometry, wireMat);
-            wireMesh.rotation.copy(heartMesh.rotation);
-            wireMesh.scale.copy(heartMesh.scale);
-            heartGroup.add(wireMesh);
+                    model.position.sub(center);
+                    model.scale.setScalar(scale);
 
-            // Aorta / great vessel (curved tube arcing off the top)
-            const vesselCurve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(0.1, 1.5, 0.1),
-                new THREE.Vector3(0.4, 2.0, -0.1),
-                new THREE.Vector3(0.0, 2.3, -0.4),
-                new THREE.Vector3(-0.5, 2.1, -0.3),
-                new THREE.Vector3(-0.8, 1.6, 0.1)
-            ]);
-            const vesselGeo = new THREE.TubeGeometry(vesselCurve, 40, 0.22, 12, false);
-            const vesselMat = new THREE.MeshPhysicalMaterial({{ color: 0xd94f5c, roughness: 0.4, metalness: 0.1 }});
-            const vesselMesh = new THREE.Mesh(vesselGeo, vesselMat);
-            heartGroup.add(vesselMesh);
+                    model.traverse((child) => {{
+                        if (child.isMesh) {{
+                            if (child.material) {{
+                                child.material.metalness = Math.min(child.material.metalness ?? 0.1, 0.2);
+                                child.material.roughness = Math.max(child.material.roughness ?? 0.4, 0.35);
+                            }}
+                        }}
+                    }});
 
-            // ---------- Hotspots ----------
-            const hotspotGeo = new THREE.SphereGeometry(0.09, 16, 16);
-            const hotspotMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff }});
+                    heartGroup.add(model);
+                    modelMesh = model;
 
-            const hotspots = [
-                {{ pos: new THREE.Vector3(0.0, 2.15, -0.35), title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation." }},
-                {{ pos: new THREE.Vector3(0.55, -0.5, 0.55), title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body." }},
-                {{ pos: new THREE.Vector3(-0.85, 0.75, 0.35), title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from systemic veins." }},
-                {{ pos: new THREE.Vector3(0.15, 0.35, 0.85), title: "CORONARY ARTERY", desc: "Supplies oxygenated blood directly to cardiac tissue." }},
-                {{ pos: new THREE.Vector3(-0.4, -0.6, 0.6), title: "RIGHT VENTRICLE", desc: "Pumps deoxygenated blood to the lungs via the pulmonary artery." }}
-            ];
-
-            const hotspotMeshes = [];
-            hotspots.forEach(data => {{
-                const mesh = new THREE.Mesh(hotspotGeo, hotspotMat.clone());
-                mesh.position.copy(data.pos);
-                mesh.userData = data;
-                heartGroup.add(mesh);
-                hotspotMeshes.push(mesh);
-
-                const ringGeo = new THREE.RingGeometry(0.13, 0.16, 24);
-                const ringMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide }});
-                const ring = new THREE.Mesh(ringGeo, ringMat);
-                ring.position.copy(data.pos);
-                ring.lookAt(camera.position);
-                heartGroup.add(ring);
-                mesh.userData.ring = ring;
-            }});
-
-            document.getElementById('loading').style.display = 'none';
+                    const fittedBox = new THREE.Box3().setFromObject(model);
+                    addHotspots(fittedBox);
+                    finishLoading();
+                }},
+                undefined,
+                function (error) {{
+                    console.warn("Could not load heart.glb, using fallback shape:", error);
+                    buildFallbackHeart();
+                }}
+            );
 
             // ---------- Raycasting for interactivity ----------
             const raycaster = new THREE.Raycaster();
@@ -763,17 +786,14 @@ def render_3d_heart(hr=72):
             // ---------- Heartbeat pulse animation (speed follows live BPM) ----------
             const clock = new THREE.Clock();
             const bpm = {hr};
-            const beatFreq = Math.max(0.4, bpm / 60); // beats per second, roughly
+            const beatFreq = Math.max(0.4, bpm / 60);
 
             function animate() {{
                 requestAnimationFrame(animate);
                 const t = clock.getElapsedTime() * beatFreq;
 
-                // Realistic double-thump pulse (lub-dub), scaled by live heart rate
                 const pulse = 1 + Math.sin(t * 4) * 0.035 + Math.max(0, Math.sin(t * 8)) * 0.02;
-                heartMesh.scale.set(1.15 * pulse, 1.15 * pulse, 1.0 * pulse);
-                wireMesh.scale.copy(heartMesh.scale);
-
+                heartGroup.scale.set(pulse, pulse, pulse);
                 heartGroup.rotation.y += 0.004;
 
                 hotspotMeshes.forEach(m => {{
