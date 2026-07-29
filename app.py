@@ -1564,58 +1564,19 @@ if page == "🏠 Home":
         unsafe_allow_html=True
     )
 
-    # Today's Focus Card & Goal Ring
-    focus_col, ring_col = st.columns([2, 1])
-    with focus_col:
-        st.markdown(
-            f"""
-            <div class="glass-card" style="border-left:4px solid #00E5FF; padding:20px; height: 100%;">
-                <div style="font-size:12px; font-weight:700; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">🎯 Today's Focus Action</div>
-                <div style="font-size:16px; font-weight:700; color:#FFFFFF; margin-bottom:6px;">Your HRV dipped 12% from your weekly average</div>
-                <div style="font-size:13.5px; color:#8A99AD; line-height:1.5;">
-                    A short walk or some deep breathing could help lower autonomic strain and boost recovery.
-                </div>
+    # Today's Focus Card
+    st.markdown(
+        f"""
+        <div class="glass-card" style="border-left:4px solid #00E5FF; padding:20px; height: 100%;">
+            <div style="font-size:12px; font-weight:700; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">🎯 Today's Focus Action</div>
+            <div style="font-size:16px; font-weight:700; color:#FFFFFF; margin-bottom:6px;">Your HRV dipped 12% from your weekly average</div>
+            <div style="font-size:13.5px; color:#8A99AD; line-height:1.5;">
+                A short walk or some deep breathing could help lower autonomic strain and boost recovery.
             </div>
-            """,
-            unsafe_allow_html=True
-        )
-    with ring_col:
-        st.markdown(
-            f"""
-            <div class="glass-card" style="padding:12px; text-align:center; display:flex; align-items:center; justify-content:space-around;">
-                <div>
-                    <div style="font-size:11px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.05em;">Optimal Health Streak</div>
-                    <div style="font-size:13px; font-weight:600; color:#00E5FF; margin-top:4px;">🔥 Active Routine</div>
-                </div>
-            """,
-            unsafe_allow_html=True
-        )
-        render_streak_ring(_streak)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Quick Actions Row
-    st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
-    st.subheader("⚡ Quick Actions")
-    qa_col1, qa_col2, qa_col3 = st.columns(3)
-    with qa_col1:
-        if st.button("🎲 Simulate Reading", use_container_width=True):
-            st.session_state.heart_rate = random.randint(55, 130)
-            st.session_state.resting_hr = random.randint(45, 90)
-            st.session_state.hrv = random.randint(15, 90)
-            st.session_state.blood_pressure_variability = random.randint(0, 20)
-            st.session_state.heart_rate_recovery = random.randint(5, 40)
-            st.session_state.sleep_quality = random.randint(30, 100)
-            st.session_state.steps = random.randint(500, 15000)
-            st.session_state.activity_feed.insert(0, {"time": "Just now", "event": "Simulated new telemetric reading"})
-            st.rerun()
-    with qa_col2:
-        if st.button("📊 View Full Report", use_container_width=True):
-            st.session_state.current_page = "📈 Health Summary"
-            st.rerun()
-    with qa_col3:
-        if st.button("🤖 Ask AI Assistant", use_container_width=True):
-            st.session_state.current_page = "🤖 AI Assistant"
-            st.rerun()
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     # Stat Cards with Trend Arrows
     st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
@@ -1677,21 +1638,6 @@ if page == "🏠 Home":
             """,
             unsafe_allow_html=True
         )
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Performance Charts
-    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
-    viz_col, radar_col = st.columns([3, 2])
-    with viz_col:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.subheader("📉 7-Day Performance Trends")
-        render_trend_chart(heart_rate, sleep_quality, steps)
-        st.markdown('</div>', unsafe_allow_html=True)
-    with radar_col:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.subheader("🕸️ Comprehensive Biomarkers")
-        render_radar_chart(heart_rate, resting_hr, hrv, blood_pressure_variability,
-                            heart_rate_recovery, sleep_quality, steps)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
