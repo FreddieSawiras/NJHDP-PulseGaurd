@@ -20,6 +20,26 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# --------------------------------------------------
+# Safe HTML rendering patch
+# --------------------------------------------------
+# Streamlit's markdown parser follows normal Markdown rules: any line that
+# starts with 4+ spaces of indentation gets treated as a preformatted code
+# block instead of HTML. Since our HTML snippets are written as indented
+# Python triple-quoted strings (for readability in the source file), that
+# indentation was being taken literally by the renderer — causing raw
+# HTML/CSS tags to print on screen as text, and some cards to render empty.
+# This wrapper strips leading whitespace from every line before handing it
+# to Streamlit, so indentation in the source code never affects rendering.
+_original_markdown = st.markdown
+
+def _safe_markdown(body, *args, **kwargs):
+    if kwargs.get("unsafe_allow_html") and isinstance(body, str):
+        body = "\n".join(line.lstrip() for line in body.strip("\n").splitlines())
+    return _original_markdown(body, *args, **kwargs)
+
+st.markdown = _safe_markdown
+
 LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
 
 # --------------------------------------------------
@@ -261,7 +281,7 @@ div[data-testid="stTabs"] div[data-baseweb="tab-border"] {
 div[data-testid="stTabs"] button[data-baseweb="tab"] {
     border-radius: 999px !important;
     padding: 8px 22px !important;
-    color: #8A99AD !important;
+    color: #D7E1EC !important;
     font-weight: 700 !important;
     font-size: 12.5px !important;
     text-transform: uppercase !important;
@@ -269,6 +289,10 @@ div[data-testid="stTabs"] button[data-baseweb="tab"] {
     background: transparent !important;
     transition: all 0.25s ease !important;
     border: none !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"] p {
+    color: inherit !important;
 }
 
 div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
@@ -406,6 +430,77 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
     transition: width 0.4s ease;
 }
 
+.vital-card {
+    background: linear-gradient(160deg, rgba(17, 28, 46, 0.85) 0%, rgba(10, 18, 32, 0.9) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
+    padding: 20px 22px;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.vital-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+.vital-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+.vital-icon-badge {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+}
+.vital-status-chip {
+    font-size: 10.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 10px;
+    border-radius: 20px;
+}
+.vital-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #8A99AD;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+}
+.vital-card-value {
+    font-size: 26px;
+    font-weight: 800;
+    color: #FFFFFF;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 12px;
+}
+.vital-bar-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+.vital-bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.4s ease;
+}
+.vital-card-desc {
+    font-size: 11.5px;
+    color: #6E7C91;
+    line-height: 1.4;
+}
+
 .alert-banner {
     background: rgba(255, 77, 109, 0.15);
     border: 1px solid #FF4D6D;
@@ -521,6 +616,23 @@ def render_metric_card(title, value_str, color, micro_insight="", trend_str="", 
                 {micro_insight}
             </div>
             <div style="position: absolute; top: 18px; right: 18px; width: 8px; height: 8px; border-radius: 50%; background: {color}; box-shadow: 0 0 10px {color};"></div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def render_vital_card(icon, title, value_str, status_label, color, pct, description):
+    st.markdown(
+        f"""
+        <div class="vital-card">
+            <div class="vital-card-top">
+                <div class="vital-icon-badge" style="background:{hex_to_rgba(color, 0.14)}; border:1px solid {hex_to_rgba(color, 0.35)};">{icon}</div>
+                <div class="vital-status-chip" style="background:{hex_to_rgba(color, 0.14)}; color:{color}; border:1px solid {hex_to_rgba(color, 0.35)};">{status_label}</div>
+            </div>
+            <div class="vital-card-title">{title}</div>
+            <div class="vital-card-value">{value_str}</div>
+            <div class="vital-bar-track"><div class="vital-bar-fill" style="width:{max(4, pct)}%; background:{color};"></div></div>
+            <div class="vital-card-desc">{description}</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -1402,30 +1514,37 @@ elif page == "❤️ Heart Dashboard":
     tab_vitals, tab_3d, tab_ecg = st.tabs(["📊 VITALS", "🫀 3D MODEL", "💓 ECG WAVEFORM"])
 
     with tab_vitals:
-        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:14px;'></div>", unsafe_allow_html=True)
+
         col1, col2, col3 = st.columns(3)
         with col1:
-            _, color, _ = metric_status("heart_rate", heart_rate)
-            render_metric_card("Heart Rate", f"{heart_rate} BPM", color)
+            status, color, pct = metric_status("heart_rate", heart_rate)
+            render_vital_card("❤️", "Heart Rate", f"{heart_rate} BPM", status, color, pct,
+                               "Normal resting range: 60–100 BPM")
         with col2:
-            _, color, _ = metric_status("resting_hr", resting_hr)
-            render_metric_card("Resting Heart Rate", f"{resting_hr} BPM", color)
+            status, color, pct = metric_status("resting_hr", resting_hr)
+            render_vital_card("🌙", "Resting Heart Rate", f"{resting_hr} BPM", status, color, pct,
+                               "Healthy baseline: 50–80 BPM")
         with col3:
-            _, color, _ = metric_status("hrv", hrv)
-            render_metric_card("Heart Rate Variability", f"{hrv} ms", color)
+            status, color, pct = metric_status("hrv", hrv)
+            render_vital_card("📶", "Heart Rate Variability", f"{hrv} ms", status, color, pct,
+                               "Higher values indicate stronger recovery")
 
-        st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
 
         col4, col5, col6 = st.columns(3)
         with col4:
-            _, color, _ = metric_status("bp_variability", blood_pressure_variability)
-            render_metric_card("Blood Pressure Variability", f"{blood_pressure_variability} mmHg", color)
+            status, color, pct = metric_status("bp_variability", blood_pressure_variability)
+            render_vital_card("🩸", "Blood Pressure Variability", f"{blood_pressure_variability} mmHg", status, color, pct,
+                               "Stable range: below 10 mmHg")
         with col5:
-            _, color, _ = metric_status("recovery", heart_rate_recovery)
-            render_metric_card("Heart Rate Recovery", f"{heart_rate_recovery} BPM", color)
+            status, color, pct = metric_status("recovery", heart_rate_recovery)
+            render_vital_card("🔄", "Heart Rate Recovery", f"{heart_rate_recovery} BPM", status, color, pct,
+                               "Drop within 1 min post-exertion: 20+ BPM is optimal")
         with col6:
-            _, color, _ = metric_status("sleep", sleep_quality)
-            render_metric_card("Sleep Quality", f"{sleep_quality}%", color)
+            status, color, pct = metric_status("sleep", sleep_quality)
+            render_vital_card("😴", "Sleep Quality", f"{sleep_quality}%", status, color, pct,
+                               "Restful sleep target: 80%+ quality score")
 
     with tab_3d:
         st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
