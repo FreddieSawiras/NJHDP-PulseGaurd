@@ -1005,9 +1005,6 @@ def _pdf_section_header(pdf, text, content_width, rgb=(13, 23, 40)):
     pdf.set_text_color(20, 20, 20)
     pdf.ln(2)
 
-def _trend_arrow(trend):
-    return {"up": "Rising", "down": "Falling", "flat": "Stable"}.get(trend, "Stable")
-
 def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
                          bp, recovery, sleep_quality, steps, battery, last_sync, watch_name,
                          period_label="Today", period_stats=None, patient_name=""):
@@ -1253,8 +1250,6 @@ if page == "🏠 Home":
     current_hour = datetime.now(ZoneInfo("America/New_York")).hour
     time_greeting = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 18 else "Good evening")
 
-    # FEATURE 1: Actionable Alert & Anomaly Banner
-    # Triggers dynamically when metrics cross thresholds
     anomalies = []
     if resting_hr > 75:
         anomalies.append(f"Resting HR is elevated above baseline")
@@ -1277,13 +1272,13 @@ if page == "🏠 Home":
             unsafe_allow_html=True
         )
 
-    # Hero Section & FEATURE 4: Doctor Quick-Share Action
+    # Hero Banner & Physician Quick-Share
     hero_col, share_col = st.columns([3, 1])
     with hero_col:
         st.markdown(
             f"""
-            <div class="glass-card" style="padding:28px; margin-bottom:20px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.9) 0%, rgba(8, 17, 31, 0.95) 100%);">
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:20px;">
+            <div class="glass-card" style="padding:28px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.9) 0%, rgba(8, 17, 31, 0.95) 100%);">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px;">
                     <div>
                         <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
                             <span style="font-size:24px;">{time_greeting}!</span>
@@ -1292,8 +1287,15 @@ if page == "🏠 Home":
                                 <span style="font-size:12px; font-weight:700; color:#00E5FF;">MONITORING ACTIVE</span>
                             </div>
                         </div>
-                        <h2 style="font-size:26px; font-weight:800; margin:0 0 6px 0; color:#FFFFFF;">Your heart health is looking steady today.</h2>
-                        <p style="font-size:13.5px; color:#8A99AD; margin:0;">Wearable telemetry actively monitoring cardiovascular dynamics and autonomic stability.</p>
+                        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+                            <h2 style="font-size:26px; font-weight:800; margin:0; color:#FFFFFF;">Your heart health is looking steady today.</h2>
+                            <div style="background:{hex_to_rgba(_score_color, 0.15)}; border:1px solid {hex_to_rgba(_score_color, 0.4)}; padding:6px 14px; border-radius:12px; display:inline-flex; align-items:center; gap:6px;">
+                                <span style="font-size:11px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Heart Score</span>
+                                <span style="font-size:18px; font-weight:800; color:{_score_color};">{_today_score}</span>
+                                <span style="font-size:12px; color:#8A99AD;">/100</span>
+                            </div>
+                        </div>
+                        <p style="font-size:13.5px; color:#8A99AD; margin-top:8px; margin-bottom:0;">Wearable telemetry actively monitoring cardiovascular dynamics and autonomic stability.</p>
                     </div>
                 </div>
             </div>
@@ -1302,10 +1304,15 @@ if page == "🏠 Home":
         )
 
     with share_col:
-        st.markdown('<div class="glass-card" style="padding:20px; text-align:center; height:100%;">', unsafe_allow_html=True)
-        st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase;'>Physician Telemetry</div>", unsafe_allow_html=True)
-        st.markdown("<div style='font-size:13px; color:#F0F4F8; margin:8px 0;'>Export full 24h formatted vitals snapshot for doctor check-in.</div>", unsafe_allow_html=True)
-        
+        st.markdown(
+            f"""
+            <div class="glass-card" style="padding:20px; text-align:center;">
+                <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Physician Telemetry</div>
+                <div style="font-size:13px; color:#F0F4F8; margin:8px 0 14px 0;">Export full 24h formatted vitals snapshot for doctor check-in.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
         pdf_bytes = generate_pdf_report(
             _today_score, _today_positives, _today_concerns,
             generate_ai_insight(_today_score, _today_positives, _today_concerns),
@@ -1320,14 +1327,15 @@ if page == "🏠 Home":
             use_container_width=True,
             type="primary"
         )
-        st.markdown('</div>', unsafe_allow_html=True)
 
-    # FEATURE 2 & FEATURE 5: Quick Symptom Logger & Environmental AQI Widget
+    st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+
+    # Symptom Logger & Environmental AQI Widget
     col_symp, col_env = st.columns([2, 1])
     
     with col_symp:
-        st.markdown('<div class="glass-card" style="padding:20px; margin-bottom:20px;">', unsafe_allow_html=True)
-        st.markdown("<div style='font-size:12px; font-weight:700; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;'>⚡ Quick Symptom & Context Logger</div>", unsafe_allow_html=True)
+        st.markdown('<div class="glass-card" style="padding:20px;">', unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:700; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>⚡ Quick Symptom & Context Logger</div>", unsafe_allow_html=True)
         
         tags = ["☕ Caffeine", "🍷 Alcohol", "🧘 High Stress", "💊 Medication Taken", "🫀 Chest Discomfort"]
         symp_cols = st.columns(len(tags))
@@ -1346,7 +1354,7 @@ if page == "🏠 Home":
     with col_env:
         st.markdown(
             f"""
-            <div class="glass-card" style="padding:20px; margin-bottom:20px;">
+            <div class="glass-card" style="padding:20px;">
                 <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">🌡️ Environmental & Air Quality</div>
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                     <div>
@@ -1362,7 +1370,9 @@ if page == "🏠 Home":
             unsafe_allow_html=True
         )
 
-    # FEATURE 7: Dynamic "Why This Matters" Micro-Insights (Raw numbers removed for status text)
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+
+    # Dynamic Micro-Insights Section
     st.subheader("📊 Vital Health Status")
     
     hr_status, hr_color, _ = metric_status("heart_rate", heart_rate)
@@ -1380,16 +1390,15 @@ if page == "🏠 Home":
     with stat_cols[3]:
         render_metric_card("BP Variability", bp_status, bp_color, "Measures vascular resistance and smooth autonomic adaptation.")
 
-    st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
-    # FEATURE 3 & FEATURE 6: Daily Habits Progress Strips & Medication Checklist
+    # Daily Habits Progress & Medication Checklist
     grid_habits, grid_meds = st.columns([2, 1])
 
     with grid_habits:
-        st.markdown('<div class="glass-card" style="padding:20px; height:100%;">', unsafe_allow_html=True)
+        st.markdown('<div class="glass-card" style="padding:20px;">', unsafe_allow_html=True)
         st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>🎯 Daily Goal & Habit Progress</div>", unsafe_allow_html=True)
 
-        # Active Zone Minutes (30 min goal)
         active_mins = min(45, int((steps / 10000) * 35))
         active_pct = min(100, int((active_mins / 30) * 100))
         st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>🔥 Active Zone Minutes</span><span style='color:#00E5FF; font-weight:700;'>{active_mins} / 30 mins</span></div>", unsafe_allow_html=True)
@@ -1397,13 +1406,11 @@ if page == "🏠 Home":
 
         st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
 
-        # Sleep Consistency
         st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>😴 Sleep Quality Score</span><span style='color:#7C5CFF; font-weight:700;'>{sleep_quality}% Quality</span></div>", unsafe_allow_html=True)
         st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{sleep_quality}%; background:#7C5CFF;'></div></div>", unsafe_allow_html=True)
 
         st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
 
-        # Hydration Intake (64 oz goal)
         hyd_pct = min(100, int((st.session_state.hydration_oz / 64) * 100))
         st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>💧 Hydration Goal</span><span style='color:#4F8BFF; font-weight:700;'>{st.session_state.hydration_oz} / 64 oz</span></div>", unsafe_allow_html=True)
         st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{hyd_pct}%; background:#4F8BFF;'></div></div>", unsafe_allow_html=True)
@@ -1411,7 +1418,7 @@ if page == "🏠 Home":
         st.markdown('</div>', unsafe_allow_html=True)
 
     with grid_meds:
-        st.markdown('<div class="glass-card" style="padding:20px; height:100%;">', unsafe_allow_html=True)
+        st.markdown('<div class="glass-card" style="padding:20px;">', unsafe_allow_html=True)
         st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>💊 Prescription & Supplement Checklist</div>", unsafe_allow_html=True)
         
         for med_name, checked in st.session_state.meds_state.items():
