@@ -556,8 +556,8 @@ def render_3d_heart(hr=72):
     <html>
     <head>
         <style>
-            html, body {{ margin: 0; overflow: hidden; background: transparent; font-family: 'Plus Jakarta Sans', sans-serif; }}
-            #container {{ width: 100%; height: 100%; position: relative; }}
+            html, body {{ margin: 0; height: 100%; overflow: hidden; background: transparent; font-family: 'Plus Jakarta Sans', sans-serif; }}
+            #container {{ width: 100%; height: 100%; min-height: 500px; position: relative; }}
             #infoBox {{
                 position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
                 background: rgba(8, 17, 31, 0.85); backdrop-filter: blur(12px);
