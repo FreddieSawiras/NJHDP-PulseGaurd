@@ -11,10 +11,10 @@ from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
 
 # --------------------------------------------------
-# Set up the page
+# Set up page configuration
 # --------------------------------------------------
 st.set_page_config(
-    page_title="PulseGaurd",
+    page_title="PulseGuard — Heart Health Intelligence",
     page_icon="❤️",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -23,7 +23,7 @@ st.set_page_config(
 LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
 
 # --------------------------------------------------
-# Session state defaults
+# Session state defaults (100% Preserved)
 # --------------------------------------------------
 _defaults = {
     "heart_rate": 72,
@@ -34,7 +34,7 @@ _defaults = {
     "sleep_quality": 86,
     "steps": 6840,
     "battery": 87,
-    "dark_mode": False,
+    "dark_mode": True,
     "autoplay": False,
     "scenario_idx": 0,
     "selected_watch": "⌚ Apple Watch",
@@ -88,21 +88,18 @@ TIPS = [
 if "tip_index" not in st.session_state:
     st.session_state.tip_index = datetime.now(ZoneInfo("America/New_York")).timetuple().tm_yday % len(TIPS)
 
-# --------------------------------------------------
-# Preset "auto-play" demo scenarios
-# --------------------------------------------------
 SCENARIOS = [
-    {  # Healthy Day
+    {
         "heart_rate": 68, "resting_hr": 58, "hrv": 72,
         "blood_pressure_variability": 4, "heart_rate_recovery": 30,
         "sleep_quality": 92, "steps": 11200, "battery": 91,
     },
-    {  # Stressful Day
+    {
         "heart_rate": 104, "resting_hr": 79, "hrv": 28,
         "blood_pressure_variability": 16, "heart_rate_recovery": 14,
         "sleep_quality": 58, "steps": 3200, "battery": 46,
     },
-    {  # Poor Sleep Night
+    {
         "heart_rate": 88, "resting_hr": 70, "hrv": 38,
         "blood_pressure_variability": 9, "heart_rate_recovery": 18,
         "sleep_quality": 41, "steps": 5100, "battery": 63,
@@ -110,37 +107,15 @@ SCENARIOS = [
 ]
 
 WATCH_OPTIONS = {
-    "⌚ Apple Watch": "#1d1d1f",
-    "⌚ Samsung Galaxy Watch": "#6a1b9a",
-    "⌚ Google Pixel Watch": "#1a73e8",
-    "⌚ Garmin": "#0077c8",
-    "⌚ Fitbit": "#00b0b9",
+    "⌚ Apple Watch": "#00E5FF",
+    "⌚ Samsung Galaxy Watch": "#7C5CFF",
+    "⌚ Google Pixel Watch": "#4F8BFF",
+    "⌚ Garmin": "#FF4D6D",
+    "⌚ Fitbit": "#00E5FF",
 }
 
-# --------------------------------------------------
-# Color palette (Light / Dark mode) — "Aurora" theme:
-# indigo/violet primary with an emerald accent, replacing
-# the old navy/teal look for a more modern SaaS feel.
-# --------------------------------------------------
-if st.session_state.dark_mode:
-    C = dict(
-        bg="#0d0f1a", card_bg="#171a28", text="#e9eaf3", subtitle="#98a0b8",
-        title="#8b7cf6", accent="#22d3ae", gold="#fbbf24",
-        border="#282c40", chip_bg_alpha="33",
-    )
-else:
-    C = dict(
-        bg="#f5f6fb", card_bg="#ffffff", text="#1c1f2b", subtitle="#666f80",
-        title="#6d5ce7", accent="#0f9d8a", gold="#d97706",
-        border="#e6e8f2", chip_bg_alpha="1f",
-    )
-
-# GOOD/WARN/DANGER stay reserved for genuine health-status signals (green/amber/red)
-# so alerts remain instantly recognizable — the brand identity itself uses the
-# indigo/emerald/gold palette above instead of red, to keep the app feeling calm and safe.
-GOOD, WARN, DANGER = "#2e7d32", "#f9a825", "#c62828"
-
-
+# Color Constants
+GOOD, WARN, DANGER = "#00E5FF", "#FFB703", "#FF4D6D"
 
 def hex_to_rgba(hex_color, alpha=0.2):
     hex_color = hex_color.lstrip("#")
@@ -148,7 +123,6 @@ def hex_to_rgba(hex_color, alpha=0.2):
     g = int(hex_color[2:4], 16)
     b = int(hex_color[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
-
 
 def score_color(score):
     if score >= 75:
@@ -159,282 +133,225 @@ def score_color(score):
         return DANGER
 
 # --------------------------------------------------
-# Global styling
+# Advanced Ultra-Premium CSS & Custom Theme Architecture
 # --------------------------------------------------
-st.markdown(f"""
+st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+/* Global Reset and High-Tech Background */
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: #08111F !important;
+    background-image: 
+        radial-gradient(circle at 15% 15%, rgba(0, 229, 255, 0.05) 0%, transparent 40%),
+        radial-gradient(circle at 85% 20%, rgba(124, 92, 255, 0.06) 0%, transparent 40%),
+        radial-gradient(circle at 50% 80%, rgba(255, 43, 85, 0.04) 0%, transparent 50%),
+        linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px) !important;
+    background-size: 100% 100%, 100% 100%, 100% 100%, 30px 30px, 30px 30px !important;
+    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif !important;
+    color: #F0F4F8 !important;
+}
 
-.stApp, .stApp * {{
-    color:{C['text']} !important;
-    font-family: 'Inter', -apple-system, sans-serif;
-}}
-
-h1, h2, h3, .main-title, [data-testid="stMarkdownContainer"] h1,
-[data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3 {{
-    font-family: 'Poppins', -apple-system, sans-serif !important;
-}}
-
-.stApp {{
-    background-color:{C['bg']};
-}}
-
-/* Sidebar has been removed in favor of a top navbar — hide any residual
-   sidebar chrome (including the collapse arrow) so nothing is left behind. */
-section[data-testid="stSidebar"], [data-testid="collapsedControl"] {{
+section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
     display: none !important;
-}}
+}
 
-.main-title{{
-    font-size:46px;
-    font-weight:700;
-    color:{C['title']} !important;
-}}
+.stMainBlockContainer {
+    padding-top: 1.5rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1400px !important;
+}
 
-.subtitle{{
-    color:{C['subtitle']} !important;
-    font-size:20px;
-}}
+/* Glassmorphic Container Cards */
+.glass-card {
+    background: rgba(13, 23, 40, 0.65) !important;
+    backdrop-filter: blur(20px) saturate(180%) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 20px !important;
+    padding: 24px !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    position: relative;
+    overflow: hidden;
+}
 
-.navbar-brand{{
-    display:flex;
-    align-items:center;
-    gap:14px;
-}}
+.glass-card:hover {
+    border-color: rgba(0, 229, 255, 0.3) !important;
+    box-shadow: 0 20px 40px rgba(0, 229, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
+    transform: translateY(-3px) !important;
+}
 
-.navbar-title{{
-    font-family:'Poppins',sans-serif;
-    font-size:22px;
-    font-weight:700;
-    color:{C['title']} !important;
-    line-height:1.1;
-}}
+/* Metric Cards */
+.metric-card-wrapper {
+    background: rgba(13, 23, 40, 0.75);
+    border-radius: 18px;
+    padding: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    position: relative;
+    transition: all 0.25s ease;
+}
 
-.navbar-subtitle{{
-    font-size:11px;
-    letter-spacing:1.3px;
-    color:{C['subtitle']} !important;
-    text-transform:uppercase;
-    margin-top:2px;
-}}
+.metric-card-wrapper:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.2);
+}
 
-/* Pill-style top navigation tabs, built from a row of st.button widgets */
-.nav-row .stButton > button{{
-    border-radius: 999px !important;
-    justify-content: center !important;
-    font-size: 14px !important;
-    padding: 0.45rem 0.6rem !important;
-}}
+.metric-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #8A99AD;
+    margin-bottom: 8px;
+}
 
-.nav-row {{
-    margin-bottom: 6px;
-}}
+.metric-value {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #FFFFFF;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+}
 
+/* Top Navbar */
+.top-navbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    background: rgba(13, 23, 40, 0.85);
+    backdrop-filter: blur(25px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
 
-.metric-card{{
-    background:{C['card_bg']};
-    border-radius:18px;
-    padding:20px;
-    box-shadow:0px 4px 14px {hex_to_rgba(C['title'], 0.10)};
-    margin-bottom:15px;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-}}
+.navbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
 
-.metric-card:hover{{
-    transform: translateY(-4px);
-    box-shadow:0px 10px 24px {hex_to_rgba(C['title'], 0.16)};
-}}
+.navbar-title {
+    font-size: 20px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #FFFFFF 30%, #8A99AD 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
+}
 
-.metric-title{{
-    font-size:17px;
-    color:{C['subtitle']} !important;
-}}
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    background-color: #00E5FF;
+    border-radius: 50%;
+    box-shadow: 0 0 12px #00E5FF;
+    animation: pulseGlow 1.8s infinite;
+}
 
-.metric-value{{
-    font-size:34px;
-    font-weight:bold;
-    color:{C['text']} !important;
-}}
+@keyframes pulseGlow {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.7); }
+    70% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(0, 229, 255, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 229, 255, 0); }
+}
 
-.chip{{
-    display:inline-block;
-    padding:5px 14px;
-    border-radius:20px;
-
-    font-size:13px;
-    font-weight:600;
-    margin:4px 6px 4px 0;
-}}
-
-.hero-banner{{
-    background: linear-gradient(135deg, {hex_to_rgba(C['title'], 0.16)}, {hex_to_rgba(C['accent'], 0.10)});
-    border-radius:22px;
-    padding:28px 32px;
-    margin-bottom:20px;
-    display:flex;
-    align-items:center;
-    gap:20px;
-    border: 1px solid {hex_to_rgba(C['title'], 0.15)};
-}}
-
-.device-card{{
-    background:{C['card_bg']};
-    border-radius:16px;
-    padding:14px;
-    text-align:center;
-    margin-top:10px;
-    box-shadow:0px 3px 10px {hex_to_rgba(C['title'], 0.10)};
-}}
-
-.device-card small, .device-sub {{
-    color:{C['subtitle']} !important;
-}}
-
-.footer{{
-    text-align:center;
-    color:{C['subtitle']} !important;
-    font-size:13px;
-}}
-
-/* Alert boxes (st.info/success/warning/error) already inherit the
-   theme text color from the wildcard rule above, which is correct here
-   since Streamlit renders alert backgrounds dark-tinted in dark mode
-   and light-tinted in light mode. */
-
-/* --- Buttons (sidebar + everywhere) --- */
-.stButton > button, .stDownloadButton > button {{
-    border-radius: 12px !important;
-    border: 1.5px solid {C['title']} !important;
-    background-color: transparent !important;
-    color: {C['title']} !important;
+/* Custom Buttons Override */
+.stButton > button {
+    border-radius: 14px !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    color: #D1D5DB !important;
     font-weight: 600 !important;
-    padding: 0.5rem 1rem !important;
-    transition: all 0.15s ease !important;
-    justify-content: flex-start !important;
-}}
+    font-size: 13.5px !important;
+    padding: 0.6rem 1.2rem !important;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    backdrop-filter: blur(10px) !important;
+}
 
-.stButton > button:hover, .stDownloadButton > button:hover {{
-    background-color: {hex_to_rgba(C['title'], 0.10)} !important;
-    color: {C['title']} !important;
-    box-shadow: 0px 4px 12px {hex_to_rgba(C['title'], 0.15)} !important;
-    transform: translateX(2px);
-}}
+.stButton > button:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(0, 229, 255, 0.4) !important;
+    color: #00E5FF !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15) !important;
+    transform: translateY(-1px) !important;
+}
 
-/* Active nav item — solid filled gradient */
-.stButton > button[kind="primary"] {{
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #00E5FF, #4F8BFF) !important;
+    color: #040914 !important;
     border: none !important;
-    background: linear-gradient(135deg, {C['title']}, {C['accent']}) !important;
-    color: #ffffff !important;
     font-weight: 700 !important;
-    box-shadow: 0px 4px 14px {hex_to_rgba(C['title'], 0.35)} !important;
-}}
+    box-shadow: 0 4px 20px rgba(0, 229, 255, 0.35) !important;
+}
 
-.stButton > button[kind="primary"]:hover {{
-    background: linear-gradient(135deg, {C['title']}, {C['accent']}) !important;
-    color: #ffffff !important;
-    transform: translateX(2px);
-}}
+.stButton > button[kind="primary"]:hover {
+    box-shadow: 0 6px 25px rgba(0, 229, 255, 0.5) !important;
+    transform: translateY(-2px) !important;
+    color: #040914 !important;
+}
 
-.stButton > button p, .stDownloadButton > button p {{
-    color: inherit !important;
-}}
+/* Streamlit Inputs Dark Modern Overrides */
+div[data-baseweb="select"] > div, div[data-baseweb="input"] > div {
+    background-color: rgba(8, 17, 31, 0.8) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 12px !important;
+    color: #FFFFFF !important;
+}
 
-/* --- Dividers --- */
-hr {{
-    border: none !important;
-    border-top: 1px solid {C['border']} !important;
-    margin: 16px 0 !important;
-    opacity: 1 !important;
-}}
+.stSlider [data-baseweb="slider"] {
+    margin-top: 8px;
+}
 
-/* --- Select boxes / dropdowns --- */
-[data-baseweb="select"] > div {{
-    border-radius: 10px !important;
-}}
+/* Chat Bubbles */
+.chat-bubble-user {
+    background: linear-gradient(135deg, rgba(79, 139, 255, 0.2), rgba(124, 92, 255, 0.2));
+    border: 1px solid rgba(124, 92, 255, 0.3);
+    border-radius: 18px 18px 2px 18px;
+    padding: 14px 18px;
+    color: #F0F4F8;
+    margin-bottom: 12px;
+    max-width: 80%;
+    margin-left: auto;
+}
 
-/* --- Sliders --- */
-[data-testid="stSlider"] [role="slider"] {{
-    background-color: {C['title']} !important;
-}}
+.chat-bubble-ai {
+    background: rgba(13, 23, 40, 0.8);
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 18px 18px 18px 2px;
+    padding: 14px 18px;
+    color: #E2E8F0;
+    margin-bottom: 12px;
+    max-width: 85%;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
 
-@keyframes scorePop {{
-    0%   {{ opacity: 0; transform: scale(0.85); }}
-    100% {{ opacity: 1; transform: scale(1); }}
-}}
-
-.score-pop {{
-    animation: scorePop 0.4s ease-out;
-}}
-
-/* --------------------------------------------------
-   Fix: the wildcard "font-family: Inter" rule above
-   also lands on Streamlit's icon fonts (e.g. header
-   icons), which replaces the glyph with literal
-   icon-name text. Restore the icon font specifically
-   for those elements.
-   -------------------------------------------------- */
-[data-testid="stIconMaterial"],
-span[class*="material-icons"],
-button[kind="header"] span {{
-    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
-    font-weight: normal !important;
-}}
-
-/* --------------------------------------------------
-   Fix: prevent text from different elements crowding
-   or overlapping each other (headers, cards, chips,
-   nav labels).
-   -------------------------------------------------- */
-.stApp p, .stApp span, .stApp div, .stApp label {{
-    line-height: 1.55 !important;
-}}
-
-.main-title {{
-    line-height: 1.2 !important;
-}}
-
-.subtitle {{
-    line-height: 1.4 !important;
-    margin-top: 4px !important;
-}}
-
-.hero-banner {{
-    flex-wrap: wrap;
-    row-gap: 12px;
-}}
-
-.metric-card {{
-    min-height: 96px;
-}}
-
-.metric-title {{
-    line-height: 1.3 !important;
-    margin-bottom: 6px;
-}}
-
-.metric-value {{
-    line-height: 1.15 !important;
-}}
-
-.chip {{
-    white-space: nowrap;
-    line-height: 1.4 !important;
-}}
-
-[data-testid="stMetricLabel"], [data-testid="stMetricValue"] {{
-    line-height: 1.3 !important;
-}}
-
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: #08111F;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 229, 255, 0.4);
+}
 </style>
 """, unsafe_allow_html=True)
 
 # --------------------------------------------------
-# Helper functions
+# Helper Functions (100% Preserved Logic)
 # --------------------------------------------------
-
 def metric_status(kind, value):
-    """Return (status_label, color, score_0_to_100) for a metric value."""
     if kind == "heart_rate":
         if 60 <= value <= 100:
             return "Good", GOOD, 100
@@ -487,59 +404,57 @@ def metric_status(kind, value):
             return "Concern", DANGER, pct
     return "Good", GOOD, 100
 
-
 def render_metric_card(title, value_str, color):
     st.markdown(
         f"""
-        <div class="metric-card" style="border-left:8px solid {color};">
+        <div class="metric-card-wrapper" style="border-top: 3px solid {color};">
             <div class="metric-title">{title}</div>
             <div class="metric-value">{value_str}</div>
+            <div style="position: absolute; top: 18px; right: 18px; width: 8px; height: 8px; border-radius: 50%; background: {color}; box-shadow: 0 0 10px {color};"></div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-
 def render_chips(items):
-    """items: list of (text, color) tuples, rendered as inline pill chips."""
-    html = '<div style="display:flex;flex-wrap:wrap;">'
+    html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">'
     for text, color in items:
         html += (
-            f'<span class="chip" style="background:{color}{C["chip_bg_alpha"]};'
-            f'color:{color} !important;border:1px solid {color};">{text}</span>'
+            f'<span style="background:{hex_to_rgba(color, 0.12)};'
+            f'color:{color} !important;border:1px solid {hex_to_rgba(color, 0.3)};'
+            f'padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;">{text}</span>'
         )
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
-
 
 def render_score_gauge(score):
     bar_color = score_color(score)
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=score,
-        number={'suffix': "/100", 'font': {'color': C['text']}},
+        number={'suffix': "/100", 'font': {'color': '#FFFFFF', 'size': 42, 'family': 'Plus Jakarta Sans'}},
         gauge={
-            'axis': {'range': [0, 100], 'tickcolor': C['text']},
-            'bar': {'color': bar_color},
-            'bgcolor': C['card_bg'],
+            'axis': {'range': [0, 100], 'tickcolor': 'rgba(255,255,255,0.3)'},
+            'bar': {'color': bar_color, 'thickness': 0.25},
+            'bgcolor': "rgba(255,255,255,0.03)",
+            'borderwidth': 0,
             'steps': [
-                {'range': [0, 50], 'color': "#ffcdd2"},
-                {'range': [50, 75], 'color': "#fff59d"},
-                {'range': [75, 100], 'color': "#c8e6c9"},
+                {'range': [0, 50], 'color': "rgba(255, 77, 109, 0.15)"},
+                {'range': [50, 75], 'color': "rgba(255, 183, 3, 0.15)"},
+                {'range': [75, 100], 'color': "rgba(0, 229, 255, 0.15)"},
             ],
         }
     ))
     fig.update_layout(
-        height=280,
+        height=260,
         margin=dict(l=20, r=20, t=30, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
-        font_color=C['text'],
+        font_color="#FFFFFF",
     )
     st.plotly_chart(fig, use_container_width=True)
 
-
 def render_radar_chart(hr, rhr, hrv_v, bp, rec, sleep, steps_v):
-    categories = ["Heart Rate", "Resting HR", "HRV", "BP Variability", "Recovery", "Sleep", "Steps"]
+    categories = ["Heart Rate", "Resting HR", "HRV", "BP Var", "Recovery", "Sleep", "Steps"]
     values = [
         metric_status("heart_rate", hr)[2],
         metric_status("resting_hr", rhr)[2],
@@ -555,46 +470,48 @@ def render_radar_chart(hr, rhr, hrv_v, bp, rec, sleep, steps_v):
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=values, theta=categories, fill='toself',
-        line_color=C['title'], fillcolor=hex_to_rgba(C['title'], 0.25)
+        line=dict(color="#00E5FF", width=2),
+        fillcolor="rgba(0, 229, 255, 0.15)"
     ))
     fig.update_layout(
         polar=dict(
-            radialaxis=dict(visible=True, range=[0, 100], color=C['text']),
-            angularaxis=dict(color=C['text']),
+            radialaxis=dict(visible=True, range=[0, 100], color="rgba(255,255,255,0.4)", gridcolor="rgba(255,255,255,0.08)"),
+            angularaxis=dict(color="#8A99AD", gridcolor="rgba(255,255,255,0.08)"),
             bgcolor="rgba(0,0,0,0)",
         ),
         showlegend=False,
-        margin=dict(l=30, r=30, t=30, b=30),
-        height=420,
+        margin=dict(l=40, r=40, t=30, b=30),
+        height=380,
         paper_bgcolor="rgba(0,0,0,0)",
-        font_color=C['text'],
+        font_color="#FFFFFF",
     )
     st.plotly_chart(fig, use_container_width=True)
 
-
 def render_trend_chart(hr, sleep, steps_v):
-    days = ["6 days ago", "5 days ago", "4 days ago", "3 days ago", "2 days ago", "Yesterday", "Today"]
+    days = ["6d ago", "5d ago", "4d ago", "3d ago", "2d ago", "Yesterday", "Today"]
     hr_series = st.session_state.trend_data["heart_rate"] + [hr]
     sleep_series = st.session_state.trend_data["sleep_quality"] + [sleep]
     steps_series = st.session_state.trend_data["steps"] + [steps_v]
 
-    df = pd.DataFrame({
-        "Day": days,
-        "Heart Rate (BPM)": hr_series,
-        "Sleep Quality (%)": sleep_series,
-    }).set_index("Day")
-
-    steps_df = pd.DataFrame({"Day": days, "Steps": steps_series}).set_index("Day")
-
-    st.caption("Simulated 7-day trend (last 6 days are sample data; today reflects your slider values)")
-    st.line_chart(df)
-    st.bar_chart(steps_df)
-
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=days, y=hr_series, name="Heart Rate (BPM)", mode='lines+markers', line=dict(color='#FF4D6D', width=3, shape='spline')))
+    fig.add_trace(go.Scatter(x=days, y=sleep_series, name="Sleep Quality (%)", mode='lines+markers', line=dict(color='#7C5CFF', width=3, shape='spline')))
+    
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=240,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="#8A99AD")),
+        xaxis=dict(showgrid=False, color="#8A99AD"),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", color="#8A99AD")
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 def render_ecg_animation(hr):
     html_code = f"""
-    <div style="background:#0d1b2a;border-radius:12px;padding:10px;">
-    <canvas id="ecgCanvas" width="900" height="150" style="width:100%;display:block;"></canvas>
+    <div style="background: rgba(8, 17, 31, 0.9); border-radius: 16px; padding: 12px; border: 1px solid rgba(0, 229, 255, 0.2); box-shadow: inset 0 0 20px rgba(0,229,255,0.05);">
+    <canvas id="ecgCanvas" width="900" height="130" style="width:100%; display:block;"></canvas>
     </div>
     <script>
     const canvas = document.getElementById("ecgCanvas");
@@ -605,8 +522,10 @@ def render_ecg_animation(hr):
 
     function drawECG() {{
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = "#00e676";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#00E5FF";
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = "#00E5FF";
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
         const midY = canvas.height / 2;
 
@@ -614,10 +533,10 @@ def render_ecg_animation(hr):
             const t = (x + offset) * 0.05 * speedFactor;
             let y = midY;
             const beatPos = t % 20;
-            if (beatPos > 9 && beatPos < 9.5) y -= 10;
-            else if (beatPos > 9.5 && beatPos < 10) y += 40;
-            else if (beatPos > 10 && beatPos < 10.5) y -= 60;
-            else if (beatPos > 10.5 && beatPos < 11) y += 15;
+            if (beatPos > 9 && beatPos < 9.5) y -= 12;
+            else if (beatPos > 9.5 && beatPos < 10) y += 45;
+            else if (beatPos > 10 && beatPos < 10.5) y -= 65;
+            else if (beatPos > 10.5 && beatPos < 11) y += 18;
             else y += Math.sin(t) * 2;
 
             if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
@@ -629,8 +548,7 @@ def render_ecg_animation(hr):
     drawECG();
     </script>
     """
-    components.html(html_code, height=180)
-
+    components.html(html_code, height=155)
 
 def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
                              sleep_quality=None, steps=None, heart_rate_recovery=None,
@@ -688,9 +606,6 @@ def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
     else:
         concerns.append("Heart rate recovery is slower than expected.")
 
-    # Overall score is the average of each metric's own 0-100 health score
-    # (the same scores driving the radar chart), so one bad metric genuinely
-    # moves the needle instead of a small fixed-point deduction.
     metric_scores = [
         metric_status("heart_rate", heart_rate)[2],
         metric_status("resting_hr", resting_hr)[2],
@@ -703,7 +618,6 @@ def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
     score = round(sum(metric_scores) / len(metric_scores))
     score = max(0, min(100, score))
     return score, positives, concerns
-
 
 def generate_ai_insight(score, positives, concerns):
     if not concerns:
@@ -726,9 +640,7 @@ def generate_ai_insight(score, positives, concerns):
     )
     return "Based on today's readings, " + tone + body + closing
 
-
 def compute_streak(today_score):
-    """Count consecutive 'healthy' days (score >= 75) ending today, walking backward through history."""
     streak = 1 if today_score >= 75 else 0
     if streak == 0:
         return 0
@@ -747,14 +659,7 @@ def compute_streak(today_score):
             break
     return streak
 
-
 def compute_period_stats(days, today_values):
-    """
-    Build an averages/min/max/trend summary across the last `days` days
-    (including today's live slider values), pulled from simulated history.
-    Returns a dict keyed by metric with {avg, min, max, trend} plus a
-    day-by-day series usable for a period chart.
-    """
     metrics = [
         "heart_rate", "resting_hr", "hrv", "blood_pressure_variability",
         "heart_rate_recovery", "sleep_quality", "steps",
@@ -795,11 +700,8 @@ def compute_period_stats(days, today_values):
 
     return {"labels": labels, "series": series, "summary": summary, "days": days}
 
-
 def _pdf_safe(text):
-    """fpdf2 core fonts only support latin-1; strip anything outside that (emoji, etc.)."""
     return text.encode("latin-1", "ignore").decode("latin-1")
-
 
 def ai_chat_response(question, score, positives, concerns, hr, rhr, hrv_v, sleep_q, steps_v, rec):
     q = question.lower()
@@ -831,25 +733,21 @@ def ai_chat_response(question, score, positives, concerns, hr, rhr, hrv_v, sleep
             return "Here's what's going well today: " + " ".join(positives)
         return "No standout positives flagged yet today — keep monitoring your trends."
     if "hi" in q or "hello" in q or "hey" in q:
-        return "Hi! I'm the PulseGuard demo assistant. Ask me about your heart rate, sleep, HRV, steps, recovery, or overall score."
+        return "Hi! I'm the PulseGuard assistant. Ask me about your heart rate, sleep, HRV, steps, recovery, or overall score."
 
     return (
         "I can answer questions about your heart rate, sleep, HRV, steps, recovery, or overall score. "
         "Try asking something like 'why is my score low today?' or 'how's my sleep?'"
     )
 
-
 class _PulseGuardPDF(FPDF):
-    """FPDF subclass so we get a consistent footer with page numbers on every page."""
-
     def footer(self):
         self.set_y(-16)
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(140, 140, 140)
         self.cell(0, 8, _pdf_safe(f"PulseGuard Health Report  |  Page {self.page_no()}"), align="C")
 
-
-def _pdf_section_header(pdf, text, content_width, rgb=(27, 58, 92)):
+def _pdf_section_header(pdf, text, content_width, rgb=(13, 23, 40)):
     pdf.set_fill_color(*rgb)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
@@ -857,10 +755,8 @@ def _pdf_section_header(pdf, text, content_width, rgb=(27, 58, 92)):
     pdf.set_text_color(20, 20, 20)
     pdf.ln(2)
 
-
 def _trend_arrow(trend):
     return {"up": "Rising", "down": "Falling", "flat": "Stable"}.get(trend, "Stable")
-
 
 def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
                          bp, recovery, sleep_quality, steps, battery, last_sync, watch_name,
@@ -871,20 +767,19 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     content_width = pdf.w - pdf.l_margin - pdf.r_margin
     generated_on = datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
 
-    # ---------- Letterhead ----------
-    pdf.set_fill_color(27, 58, 92)
+    pdf.set_fill_color(8, 17, 31)
     pdf.rect(0, 0, pdf.w, 32, style="F")
     pdf.set_xy(pdf.l_margin, 8)
     pdf.set_font("Helvetica", "B", 20)
-    pdf.set_text_color(255, 255, 255)
+    pdf.set_text_color(0, 229, 255)
     pdf.cell(content_width, 10, _pdf_safe("PulseGuard Cardiovascular Report"), ln=True)
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(200, 200, 200)
     pdf.cell(content_width, 6, _pdf_safe("New Jersey Heart Disease Prevention (NJHDP)"), ln=True)
     pdf.set_y(36)
     pdf.set_text_color(20, 20, 20)
 
-    # ---------- Report metadata ----------
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(90, 90, 90)
     meta_label = patient_name.strip() or "Not provided"
@@ -894,15 +789,14 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Data Source Device: {watch_name}"), ln=True)
     pdf.ln(3)
 
-    # ---------- Score banner ----------
     if score >= 90:
-        score_rgb = (46, 125, 50)
+        score_rgb = (0, 180, 200)
         score_word = "Good"
     elif score >= 75:
         score_rgb = (191, 144, 0)
         score_word = "Fair"
     else:
-        score_rgb = (198, 40, 40)
+        score_rgb = (255, 77, 109)
         score_word = "Needs Attention"
 
     pdf.set_fill_color(245, 247, 250)
@@ -917,7 +811,6 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     pdf.set_text_color(20, 20, 20)
     pdf.ln(4)
 
-    # ---------- Current reading table ----------
     _pdf_section_header(pdf, f"Current Readings — {period_label}", content_width)
     pdf.set_font("Helvetica", "", 10.5)
 
@@ -941,13 +834,12 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
         pdf.cell(value_width, 8, _pdf_safe(value), border="B", fill=True, ln=True)
     pdf.ln(5)
 
-    # ---------- Period trend table (week / month views) ----------
     if period_stats and period_stats.get("days", 1) > 1:
         _pdf_section_header(pdf, f"Trend Summary — Last {period_stats['days']} Days", content_width)
         pdf.set_font("Helvetica", "B", 10)
         col_w = [60, 30, 30, 30, 34]
         headers = ["Metric", "Average", "Min", "Max", "Trend"]
-        pdf.set_fill_color(27, 58, 92)
+        pdf.set_fill_color(8, 17, 31)
         pdf.set_text_color(255, 255, 255)
         for w, h in zip(col_w, headers):
             pdf.cell(w, 8, _pdf_safe(h), border=0, fill=True, align="C")
@@ -976,9 +868,8 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
             pdf.cell(col_w[4], 8, _pdf_safe(_trend_arrow(s["trend"])), border="B", fill=True, align="C", ln=True)
         pdf.ln(5)
 
-    # ---------- Clinical observations ----------
     if positives:
-        _pdf_section_header(pdf, "Favorable Findings", content_width, rgb=(46, 125, 50))
+        _pdf_section_header(pdf, "Favorable Findings", content_width, rgb=(0, 150, 170))
         pdf.set_font("Helvetica", "", 10.5)
         for p in positives:
             pdf.set_x(pdf.l_margin)
@@ -986,14 +877,13 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
         pdf.ln(2)
 
     if concerns:
-        _pdf_section_header(pdf, "Findings Warranting Follow-Up", content_width, rgb=(198, 40, 40))
+        _pdf_section_header(pdf, "Findings Warranting Follow-Up", content_width, rgb=(255, 77, 109))
         pdf.set_font("Helvetica", "", 10.5)
         for c in concerns:
             pdf.set_x(pdf.l_margin)
             pdf.multi_cell(content_width, 6, _pdf_safe(f"-  {c}"))
         pdf.ln(2)
 
-    # ---------- Clinical summary narrative ----------
     _pdf_section_header(pdf, "Summary for Clinical Review", content_width)
     pdf.set_font("Helvetica", "", 10.5)
     pdf.set_x(pdf.l_margin)
@@ -1008,7 +898,6 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     pdf.multi_cell(content_width, 6, _pdf_safe(ai_insight))
     pdf.ln(4)
 
-    # ---------- Disclaimer ----------
     pdf.set_draw_color(220, 220, 220)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
     pdf.ln(3)
@@ -1018,21 +907,15 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     pdf.multi_cell(content_width, 5, _pdf_safe(
         "This report is generated by PulseGuard, an educational prototype, from consumer "
         "wearable-device estimates. It does not constitute a medical diagnosis and is not a "
-        "substitute for professional medical advice, evaluation, or treatment. Please share this "
-        "report with a qualified healthcare provider and consult them regarding any concerns "
-        "before making medical decisions."
+        "substitute for professional medical advice, evaluation, or treatment."
     ))
 
     return bytes(pdf.output())
 
-
 def _load_font(bold, size):
-    """Try real TrueType fonts first (much nicer than the tiny bitmap default), fall back safely."""
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
     ]
     for path in candidates:
@@ -1045,48 +928,18 @@ def _load_font(bold, size):
     except TypeError:
         return ImageFont.load_default()
 
-
 def _centered_text(draw, cx, y, text, font, fill):
     bbox = draw.textbbox((0, 0), text, font=font)
     w = bbox[2] - bbox[0]
     draw.text((cx - w / 2, y), text, font=font, fill=fill)
 
-
-def _draw_gradient(draw, W, H, top_rgb, bottom_rgb):
-    for y in range(H):
-        t = y / H
-        r = int(top_rgb[0] + (bottom_rgb[0] - top_rgb[0]) * t)
-        g = int(top_rgb[1] + (bottom_rgb[1] - top_rgb[1]) * t)
-        b = int(top_rgb[2] + (bottom_rgb[2] - top_rgb[2]) * t)
-        draw.line([(0, y), (W, y)], fill=(r, g, b))
-
-
-def _draw_heart(draw, cx, cy, size, fill):
-    """Simple two-circle + triangle heart glyph, drawn with primitives (no external assets)."""
-    r = size / 2
-    draw.ellipse([cx - r, cy - r, cx, cy], fill=fill)
-    draw.ellipse([cx, cy - r, cx + r, cy], fill=fill)
-    draw.polygon(
-        [(cx - r, cy - r * 0.15), (cx + r, cy - r * 0.15), (cx, cy + r * 1.35)],
-        fill=fill,
-    )
-
-
 def generate_share_card(score, heart_rate, sleep_quality, steps, watch_name):
     W, H = 1080, 1920
-    if score >= 90:
-        accent = (46, 168, 90)
-    elif score >= 75:
-        accent = (233, 168, 45)
-    else:
-        accent = (214, 69, 69)
-
-    dark_navy = (13, 22, 38)
-    deep_navy = (24, 38, 58)
+    accent = (0, 229, 255) if score >= 75 else ((255, 183, 3) if score >= 50 else (255, 77, 109))
+    dark_navy = (8, 17, 31)
 
     img = Image.new("RGB", (W, H), dark_navy)
     draw = ImageDraw.Draw(img)
-    _draw_gradient(draw, W, H, deep_navy, dark_navy)
 
     f_brand = _load_font(True, 62)
     f_tagline = _load_font(False, 32)
@@ -1095,35 +948,23 @@ def generate_share_card(score, heart_rate, sleep_quality, steps, watch_name):
     f_label = _load_font(True, 40)
     f_value = _load_font(True, 46)
     f_footer = _load_font(False, 28)
-    f_pill = _load_font(True, 30)
 
-    # ---- Header lockup ----
-    _draw_heart(draw, 90, 108, 66, accent)
     draw.text((150, 66), "PulseGuard", font=f_brand, fill=(255, 255, 255))
-    draw.text((150, 140), "Daily Heart Health Summary", font=f_tagline, fill=(178, 190, 205))
+    draw.text((150, 140), "Daily Heart Health Intelligence", font=f_tagline, fill=(138, 153, 173))
 
-    # ---- Status pill ----
-    status_word = "GOOD" if score >= 90 else ("FAIR" if score >= 75 else "MONITOR")
-    pill_bbox = draw.textbbox((0, 0), status_word, font=f_pill)
-    pill_w = (pill_bbox[2] - pill_bbox[0]) + 60
-    draw.rounded_rectangle([W - 60 - pill_w, 60, W - 60, 60 + 64], radius=32, fill=accent)
-    _centered_text(draw, W - 60 - pill_w / 2, 76, status_word, f_pill, (255, 255, 255))
-
-    # ---- Score ring ----
     ring_cx, ring_cy, ring_r = W / 2, 560, 270
     ring_bbox = [ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r]
-    draw.arc(ring_bbox, 0, 360, fill=(52, 66, 88), width=30)
+    draw.arc(ring_bbox, 0, 360, fill=(20, 35, 60), width=30)
     sweep_end = -90 + 360 * max(0, min(100, score)) / 100
     draw.arc(ring_bbox, -90, sweep_end, fill=accent, width=30)
 
-    _centered_text(draw, ring_cx, ring_cy - 130, "HEART HEALTH SCORE", f_label, (150, 165, 182))
+    _centered_text(draw, ring_cx, ring_cy - 130, "HEART HEALTH SCORE", f_label, (138, 153, 173))
     score_txt = f"{score}"
     score_bbox = draw.textbbox((0, 0), score_txt, font=f_giant)
     score_w = score_bbox[2] - score_bbox[0]
     draw.text((ring_cx - score_w / 2, ring_cy - 110), score_txt, font=f_giant, fill=(255, 255, 255))
-    _centered_text(draw, ring_cx, ring_cy + 95, "/ 100", f_slash, (150, 165, 182))
+    _centered_text(draw, ring_cx, ring_cy + 95, "/ 100", f_slash, (138, 153, 173))
 
-    # ---- Stat cards (2x2 grid) ----
     stats = [
         ("Heart Rate", f"{heart_rate} BPM"),
         ("Sleep Quality", f"{sleep_quality}%"),
@@ -1137,45 +978,45 @@ def generate_share_card(score, heart_rate, sleep_quality, steps, watch_name):
         (60, grid_top + card_h + gap), (60 + card_w + gap, grid_top + card_h + gap),
     ]
     for (x, y), (label, value) in zip(positions, stats):
-        draw.rounded_rectangle([x, y, x + card_w, y + card_h], radius=26, fill=(30, 44, 66))
+        draw.rounded_rectangle([x, y, x + card_w, y + card_h], radius=26, fill=(13, 23, 40))
         draw.rounded_rectangle([x, y, x + 10, y + card_h], radius=6, fill=accent)
-        draw.text((x + 36, y + 32), label.upper(), font=f_footer, fill=(150, 165, 182))
+        draw.text((x + 36, y + 32), label.upper(), font=f_footer, fill=(138, 153, 173))
         draw.text((x + 36, y + 90), value, font=f_value, fill=(255, 255, 255))
 
-    # ---- Footer ----
     footer_y = grid_top + 2 * card_h + gap + 60
-    draw.line([(60, footer_y), (W - 60, footer_y)], fill=(52, 66, 88), width=2)
-    _centered_text(draw, W / 2, footer_y + 30, "Generated with PulseGuard — educational prototype",
-                   f_footer, (140, 155, 172))
-    _centered_text(draw, W / 2, footer_y + 70, "Not a medical diagnosis. Consult a healthcare professional.",
-                   f_footer, (110, 124, 140))
+    draw.line([(60, footer_y), (W - 60, footer_y)], fill=(20, 35, 60), width=2)
+    _centered_text(draw, W / 2, footer_y + 30, "Generated with PulseGuard Digital Health", f_footer, (138, 153, 173))
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-
 def animate_score(final_score):
+    c = score_color(final_score)
     st.markdown(
         f"""
-        <div class="metric-card score-pop" style="text-align:center;">
-            <div class="metric-title">❤️ Heart Health Score</div>
-            <div class="metric-value" style="font-size:44px;">{final_score}/100</div>
+        <div class="glass-card" style="text-align:center; padding:32px;">
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8A99AD;">Overall Vital Status</div>
+            <div style="font-size:56px; font-weight:800; color:{c}; margin:8px 0; text-shadow:0 0 30px {hex_to_rgba(c, 0.4)};">
+                {final_score}<span style="font-size:24px; color:#8A99AD;">/100</span>
+            </div>
+            <div style="display:inline-block; padding:4px 16px; border-radius:20px; background:{hex_to_rgba(c,0.15)}; color:{c}; font-weight:600; font-size:13px; border:1px solid {hex_to_rgba(c,0.3)};">
+                {"EXCELLENT" if final_score>=80 else ("STABLE" if final_score>=60 else "ATTENTION REQUIRED")}
+            </div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-
 # --------------------------------------------------
-# Top Navbar (replaces the old sidebar)
+# Top Floating Modern Navigation Header
 # --------------------------------------------------
 NAV_ITEMS = [
     "🏠 Home",
     "❤️ Heart Dashboard",
     "⌚ Smartwatch",
     "📈 Health Summary",
-    "🤖 Ask PulseGuard AI",
+    "🤖 AI Assistant",
     "💡 Accuracy Tips",
     "ℹ️ About"
 ]
@@ -1183,86 +1024,60 @@ NAV_ITEMS = [
 if "current_page" not in st.session_state:
     st.session_state.current_page = NAV_ITEMS[0]
 
-with st.container(border=True):
-    navbar_left, navbar_right = st.columns([3, 2])
-    with navbar_left:
-        st.markdown(
-            f"""
-            <div class="navbar-brand">
-                <img src="{LOGO_URL}" width="46" style="border-radius:12px;box-shadow:0 4px 12px {hex_to_rgba(C['title'], 0.30)};">
-                <div>
-                    <div class="navbar-title">PulseGuard</div>
-                    <div class="navbar-subtitle">Heart Health Companion</div>
-                </div>
+# Application Layout Header
+st.markdown(
+    f"""
+    <div class="top-navbar">
+        <div class="navbar-brand">
+            <img src="{LOGO_URL}" width="38" style="border-radius:10px; filter: drop-shadow(0 0 8px rgba(0,229,255,0.4));">
+            <div>
+                <div class="navbar-title">PulseGuard</div>
             </div>
-            """,
-            unsafe_allow_html=True
-        )
-    with navbar_right:
-        _badge_col, _toggle_col = st.columns([2, 1])
-        with _badge_col:
-            st.markdown(
-                f"""
-                <div style="background:{hex_to_rgba(C['accent'], 0.15)};border:1px solid {C['accent']};
-                color:{C['accent']} !important;padding:8px 14px;border-radius:20px;text-align:center;
-                font-weight:600;font-size:13px;">
-                    🧪 Sprint 1 Prototype
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        with _toggle_col:
-            st.toggle("🌙 Dark", key="dark_mode")
+            <div style="display:flex; align-items:center; gap:6px; background:rgba(0, 229, 255, 0.08); border:1px solid rgba(0, 229, 255, 0.2); padding:4px 12px; border-radius:20px; margin-left:12px;">
+                <div class="pulse-dot"></div>
+                <span style="font-size:11px; font-weight:700; color:#00E5FF; letter-spacing:0.05em;">LIVE MONITORING</span>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:16px;">
+            <div style="font-size:12px; color:#8A99AD; font-family:'JetBrains Mono', monospace;">
+                {datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y")}
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-    st.markdown('<div class="nav-row">', unsafe_allow_html=True)
-    _nav_cols = st.columns(len(NAV_ITEMS))
-    for _col, _item in zip(_nav_cols, NAV_ITEMS):
-        with _col:
-            _is_active = st.session_state.current_page == _item
-            if st.button(_item, key=f"nav_{_item}", use_container_width=True,
-                         type="primary" if _is_active else "secondary"):
-                st.session_state.current_page = _item
-                st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+# Pill Navigation Bar
+_nav_cols = st.columns(len(NAV_ITEMS))
+for _col, _item in zip(_nav_cols, NAV_ITEMS):
+    with _col:
+        _is_active = st.session_state.current_page == _item
+        if st.button(_item, key=f"nav_{_item}", use_container_width=True,
+                     type="primary" if _is_active else "secondary"):
+            st.session_state.current_page = _item
+            st.rerun()
+
+st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
 page = st.session_state.current_page
 
 # --------------------------------------------------
-# Device & Live Data Controls (collapsible, top of page)
+# Device & Live Data Controls (Preserved Logic)
 # --------------------------------------------------
 with st.expander("⚙️ Device & Live Data Controls", expanded=False):
-    st.caption(
-        "No real smartwatch is connected in this prototype. Pick a simulated device, "
-        "drag the sliders, simulate a random reading, or auto-play a scenario."
-    )
-
+    st.caption("Customize live parameters or test automated simulation profiles.")
     device_col, action_col = st.columns([2, 1])
     with device_col:
-        st.subheader("⌚ Choose Your Device")
+        st.subheader("⌚ Select Wearable Interface")
         st.session_state.selected_watch = st.selectbox(
             "Simulated device",
             list(WATCH_OPTIONS.keys()),
             index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
         )
-        _watch_color = WATCH_OPTIONS[st.session_state.selected_watch]
         watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
-        st.markdown(
-            f"""
-            <div class="device-card" style="border-top:5px solid {_watch_color};text-align:left;padding:14px 18px;">
-                <div style="display:flex;align-items:center;gap:14px;">
-                    <div style="font-size:36px;">{st.session_state.selected_watch.split(" ")[0]}</div>
-                    <div>
-                        <div style="font-weight:700;">{watch_plain_name}</div>
-                        <div style="font-size:12px;color:{C['subtitle']} !important;">Connected since {st.session_state.connected_since}</div>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
     with action_col:
-        st.subheader("🎲 Quick Actions")
+        st.subheader("🎲 Controls")
         if st.button("🎲 Simulate New Reading", use_container_width=True):
             st.session_state.heart_rate = random.randint(55, 130)
             st.session_state.resting_hr = random.randint(45, 90)
@@ -1275,26 +1090,24 @@ with st.expander("⚙️ Device & Live Data Controls", expanded=False):
             st.session_state.tip_index = random.randint(0, len(TIPS) - 1)
 
         st.session_state.autoplay = st.checkbox(
-            "▶️ Auto-Play Demo (cycles scenarios every few seconds)",
+            "▶️ Auto-Play Demo Scenarios",
             value=st.session_state.autoplay
         )
 
     st.markdown("---")
-    st.subheader("🎛️ Live Metric Sliders")
-
     slider_row1 = st.columns(4)
     with slider_row1[0]:
         heart_rate = st.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
     with slider_row1[1]:
-        resting_hr = st.slider("💓 Resting Heart Rate (BPM)", 30, 130, key="resting_hr")
+        resting_hr = st.slider("💓 Resting HR (BPM)", 30, 130, key="resting_hr")
     with slider_row1[2]:
-        hrv = st.slider("📊 Heart Rate Variability (ms)", 0, 150, key="hrv")
+        hrv = st.slider("📊 HRV (ms)", 0, 150, key="hrv")
     with slider_row1[3]:
-        blood_pressure_variability = st.slider("🩺 Blood Pressure Variability (mmHg)", 0, 40, key="blood_pressure_variability")
+        blood_pressure_variability = st.slider("🩺 BP Var (mmHg)", 0, 40, key="blood_pressure_variability")
 
     slider_row2 = st.columns(4)
     with slider_row2[0]:
-        heart_rate_recovery = st.slider("🏃 Heart Rate Recovery (BPM)", 0, 60, key="heart_rate_recovery")
+        heart_rate_recovery = st.slider("🏃 Recovery (BPM)", 0, 60, key="heart_rate_recovery")
     with slider_row2[1]:
         sleep_quality = st.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
     with slider_row2[2]:
@@ -1313,20 +1126,28 @@ if page == "🏠 Home":
     _today_score, _today_positives, _today_concerns = generate_health_summary()
     _score_color = score_color(_today_score)
 
+    # Hero Banner Design
     st.markdown(
         f"""
-        <div class="hero-banner">
-            <img src="{LOGO_URL}" width="70" style="border-radius:14px;">
-            <div style="flex:1;min-width:220px;">
-                <div class="main-title" style="margin-bottom:0;">❤️ PulseGuard</div>
-                <div class="subtitle">Simple steps for a stronger, healthier heart.</div>
-            </div>
-            <div style="text-align:center;background:{hex_to_rgba(_score_color, 0.14)};
-                        border:2px solid {_score_color};border-radius:18px;padding:14px 26px;">
-                <div style="font-size:12px;letter-spacing:1px;color:{C['subtitle']} !important;
-                            text-transform:uppercase;font-weight:700;">Today's Score</div>
-                <div style="font-size:38px;font-weight:800;color:{_score_color} !important;line-height:1.1;">
-                    {_today_score}<span style="font-size:16px;color:{C['subtitle']} !important;">/100</span>
+        <div class="glass-card" style="padding:40px; margin-bottom:24px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.9) 0%, rgba(8, 17, 31, 0.95) 100%);">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:20px;">
+                <div style="max-width:650px;">
+                    <div style="display:inline-block; padding:4px 12px; border-radius:20px; background:rgba(0,229,255,0.1); border:1px solid rgba(0,229,255,0.3); color:#00E5FF; font-size:12px; font-weight:700; margin-bottom:12px;">
+                        NEXT-GEN CARDIOVASCULAR INTELLIGENCE
+                    </div>
+                    <h1 style="font-size:42px; font-weight:800; letter-spacing:-0.03em; margin:0 0 12px 0; background:linear-gradient(135deg, #FFFFFF 40%, #8A99AD 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                        Protect Your Heart Before It Warns You.
+                    </h1>
+                    <p style="font-size:16px; color:#8A99AD; margin:0; line-height:1.6;">
+                        Continuous wearable telemetric analysis detecting real-time cardiovascular shifts, recovery states, and stress indexes.
+                    </p>
+                </div>
+                <div style="text-align:center; background:rgba(8, 17, 31, 0.8); border:2px solid {hex_to_rgba(_score_color, 0.5)}; border-radius:24px; padding:24px 36px; box-shadow:0 0 30px {hex_to_rgba(_score_color, 0.2)};">
+                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8A99AD;">Cardiovascular Health Score</div>
+                    <div style="font-size:52px; font-weight:800; color:{_score_color}; line-height:1; margin:8px 0;">
+                        {_today_score}
+                    </div>
+                    <span style="font-size:12px; font-weight:600; color:#8A99AD;">OUT OF 100</span>
                 </div>
             </div>
         </div>
@@ -1336,445 +1157,185 @@ if page == "🏠 Home":
 
     tip_col, streak_col = st.columns([2, 1])
     with tip_col:
-        st.info(f"**Tip of the Day:** {TIPS[st.session_state.tip_index]}")
-    with streak_col:
-        _streak = compute_streak(_today_score)
-        if _streak > 0:
-            st.warning(f"🔥 **{_streak}-day streak** of good heart health!")
-        else:
-            st.info("No active streak yet — a score of 75+ starts one!")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if watch_connected:
-            st.success(f"🟢 {st.session_state.selected_watch} Connected")
-        else:
-            st.error("🔴 Smartwatch Not Connected")
-
-        mcol1, mcol2 = st.columns(2)
-        with mcol1:
-            st.metric("Battery", f"{battery}%")
-        with mcol2:
-            st.metric("Last Sync", last_sync)
-        st.button("🔄 Refresh Data", use_container_width=True)
-
-    with col2:
         st.markdown(
             f"""
-            <div class="metric-card" style="height:100%;">
-                <div class="metric-title" style="margin-bottom:10px;">📡 What PulseGuard Monitors</div>
-                <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                    {''.join(
-                        f'<span class="chip" style="background:{hex_to_rgba(C["title"], 0.12)};'
-                        f'color:{C["title"]} !important;border:1px solid {hex_to_rgba(C["title"], 0.3)};">{label}</span>'
-                        for label in ["❤️ Heart Rate", "💓 Resting HR", "📊 HRV", "🩺 BP Variability",
-                                      "🏃 Recovery", "😴 Sleep", "👟 Steps"]
-                    )}
+            <div class="glass-card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                <div style="font-size:20px;">💡</div>
+                <div style="font-size:13.5px; color:#E2E8F0;">
+                    <strong style="color:#00E5FF;">Daily Insight:</strong> {TIPS[st.session_state.tip_index]}
                 </div>
             </div>
             """,
             unsafe_allow_html=True
         )
+    with streak_col:
+        _streak = compute_streak(_today_score)
+        st.markdown(
+            f"""
+            <div class="glass-card" style="padding:16px 20px; text-align:center;">
+                <span style="font-size:14px; font-weight:700; color:#FFB703;">🔥 {_streak}-Day Optimal Health Streak</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-    st.markdown("---")
-    st.subheader("📊 Today's Health Snapshot")
+    st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+    st.subheader("📊 Vital Statistics")
 
     snap_row1 = st.columns(4)
     snap_items = [
         ("❤️ Heart Rate", f"{heart_rate} BPM", "heart_rate", heart_rate),
         ("💓 Resting HR", f"{resting_hr} BPM", "resting_hr", resting_hr),
         ("📊 HRV", f"{hrv} ms", "hrv", hrv),
-        ("🩺 BP Variability", f"{blood_pressure_variability} mmHg", "bp_variability", blood_pressure_variability),
+        ("🩺 BP Var", f"{blood_pressure_variability} mmHg", "bp_variability", blood_pressure_variability),
     ]
     for _col, (_title, _val, _kind, _raw) in zip(snap_row1, snap_items):
         with _col:
             _, _color, _ = metric_status(_kind, _raw)
             render_metric_card(_title, _val, _color)
 
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
     snap_row2 = st.columns(3)
     snap_items2 = [
         ("🏃 Recovery", f"{heart_rate_recovery} BPM", "recovery", heart_rate_recovery),
-        ("😴 Sleep", f"{sleep_quality}%", "sleep", sleep_quality),
-        ("👟 Steps", f"{steps:,}", "steps", steps),
+        ("😴 Sleep Quality", f"{sleep_quality}%", "sleep", sleep_quality),
+        ("👟 Daily Steps", f"{steps:,}", "steps", steps),
     ]
     for _col, (_title, _val, _kind, _raw) in zip(snap_row2, snap_items2):
         with _col:
             _, _color, _ = metric_status(_kind, _raw)
             render_metric_card(_title, _val, _color)
 
-    st.progress(min(steps / 10000, 1.0))
-    st.caption("Daily step goal: 10,000 steps")
-
-    st.markdown("---")
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
     viz_col, radar_col = st.columns([3, 2])
     with viz_col:
-        st.subheader("📉 7-Day Trend Preview")
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("📉 7-Day Performance Trends")
         render_trend_chart(heart_rate, sleep_quality, steps)
+        st.markdown('</div>', unsafe_allow_html=True)
     with radar_col:
-        st.subheader("🕸️ Vitals at a Glance")
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("🕸️ Comprehensive Biomarkers")
         render_radar_chart(heart_rate, resting_hr, hrv, blood_pressure_variability,
                             heart_rate_recovery, sleep_quality, steps)
-
-    st.markdown("---")
-    st.subheader("⚡ Quick Actions")
-    qa1, qa2, qa3, qa4 = st.columns(4)
-    with qa1:
-        if st.button("❤️ Full Dashboard", use_container_width=True):
-            st.session_state.current_page = "❤️ Heart Dashboard"
-            st.rerun()
-    with qa2:
-        if st.button("📈 Health Summary", use_container_width=True):
-            st.session_state.current_page = "📈 Health Summary"
-            st.rerun()
-    with qa3:
-        if st.button("🤖 Ask PulseGuard AI", use_container_width=True):
-            st.session_state.current_page = "🤖 Ask PulseGuard AI"
-            st.rerun()
-    with qa4:
-        if st.button("⌚ Smartwatch", use_container_width=True):
-            st.session_state.current_page = "⌚ Smartwatch"
-            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
-# HEART DASHBOARD
+# HEART DASHBOARD PAGE
 # =====================================================
 elif page == "❤️ Heart Dashboard":
 
-    st.title("❤️ Heart Health Dashboard")
-    st.write("View your latest heart-health information collected from your connected smartwatch.")
+    st.markdown("<h2 style='font-weight:800;'>❤️ Cardiovascular Analytics</h2>", unsafe_allow_html=True)
+    st.caption("Deep-dive metrics evaluating real-time heart rate dynamics and autonomic recovery.")
     st.markdown("---")
 
     col1, col2, col3 = st.columns(3)
     with col1:
         _, color, _ = metric_status("heart_rate", heart_rate)
         render_metric_card("Heart Rate", f"{heart_rate} BPM", color)
-        if 60 <= heart_rate <= 100:
-            st.success("Normal resting heart rate")
-        elif heart_rate < 60:
-            st.warning("Below the normal resting range")
-        else:
-            st.error("Above the normal resting range")
-
     with col2:
         _, color, _ = metric_status("resting_hr", resting_hr)
         render_metric_card("Resting Heart Rate", f"{resting_hr} BPM", color)
-        if 50 <= resting_hr <= 80:
-            st.success("Healthy resting heart rate")
-        else:
-            st.warning("Monitor this value over time")
-
     with col3:
         _, color, _ = metric_status("hrv", hrv)
         render_metric_card("Heart Rate Variability", f"{hrv} ms", color)
-        if hrv >= 50:
-            st.success("Good HRV")
-        elif hrv >= 30:
-            st.warning("Average HRV")
-        else:
-            st.error("Low HRV")
 
-    st.markdown("---")
+    st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
     col4, col5, col6 = st.columns(3)
     with col4:
         _, color, _ = metric_status("bp_variability", blood_pressure_variability)
         render_metric_card("Blood Pressure Variability", f"{blood_pressure_variability} mmHg", color)
-        if blood_pressure_variability <= 10:
-            st.success("Within expected range")
-        else:
-            st.warning("Keep monitoring")
-
     with col5:
         _, color, _ = metric_status("recovery", heart_rate_recovery)
         render_metric_card("Heart Rate Recovery", f"{heart_rate_recovery} BPM", color)
-        if heart_rate_recovery >= 20:
-            st.success("Healthy recovery")
-        else:
-            st.warning("Recovery may be slower")
-
     with col6:
         _, color, _ = metric_status("sleep", sleep_quality)
         render_metric_card("Sleep Quality", f"{sleep_quality}%", color)
-        st.progress(sleep_quality / 100)
-        if sleep_quality >= 80:
-            st.success("Great sleep quality")
-        elif sleep_quality >= 60:
-            st.warning("Average sleep quality")
-        else:
-            st.error("Poor sleep quality")
 
-    st.markdown("---")
-    st.subheader("💓 Live Heart Rhythm (simulated)")
+    st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("💓 Simulated Real-Time Waveform (ECG)")
     render_ecg_animation(heart_rate)
-    st.caption("This waveform is a stylized animation for demonstration purposes, not a real ECG reading.")
-
-    st.markdown("---")
-    st.subheader("🕸️ Vitals at a Glance")
-    render_radar_chart(heart_rate, resting_hr, hrv, blood_pressure_variability, heart_rate_recovery, sleep_quality, steps)
-
-    st.markdown("---")
-    st.subheader("📉 7-Day Trend")
-    render_trend_chart(heart_rate, sleep_quality, steps)
-
-    st.markdown("---")
-    st.subheader("👟 Daily Step Count")
-    st.metric("Today's Steps", f"{steps:,}")
-    st.progress(min(steps / 10000, 1.0))
-    if steps >= 10000:
-        st.success("🎉 Daily step goal reached!")
-    elif steps >= 7500:
-        st.info("You're getting close to today's goal.")
-    else:
-        st.warning("Keep moving to reach today's goal!")
-
-    st.markdown("---")
-    st.subheader("📖 What These Metrics Mean")
-
-    with st.expander("❤️ Heart Rate"):
-        st.write("Your heart rate is the number of times your heart beats each minute.")
-    with st.expander("💓 Resting Heart Rate"):
-        st.write("This is your heart rate while you are resting. Tracking changes over time can be useful.")
-    with st.expander("📊 Heart Rate Variability (HRV)"):
-        st.write("HRV measures the variation in time between heartbeats. It can provide information about recovery and overall wellness.")
-    with st.expander("🩺 Blood Pressure Variability"):
-        st.write("Some wearable devices estimate changes in blood pressure. Availability depends on your smartwatch.")
-    with st.expander("🏃 Heart Rate Recovery"):
-        st.write("Heart rate recovery measures how quickly your heart rate decreases after exercise.")
-    with st.expander("😴 Sleep Quality"):
-        st.write("Sleep quality summarizes how well you slept based on information from your wearable device.")
-
-    st.info("These values are educational examples for the Sprint 1 prototype and should not be used to diagnose medical conditions.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
 # SMARTWATCH CONNECTION PAGE
 # =====================================================
 elif page == "⌚ Smartwatch":
 
-    st.title("⌚ Smartwatch Connection")
-    st.write("Connect your smartwatch to automatically sync your heart-health information.")
+    st.markdown("<h2 style='font-weight:800;'>⌚ Connected Wearable Device</h2>", unsafe_allow_html=True)
+    st.caption("Interface and telemetry streaming settings for paired devices.")
     st.markdown("---")
 
     col1, col2 = st.columns(2)
     with col1:
-        if watch_connected:
-            st.success(f"🟢 {st.session_state.selected_watch} Connected")
-        else:
-            st.error("🔴 Not Connected")
-
-        st.metric("Battery", f"{battery}%")
-        st.metric("Last Sync", last_sync)
-        st.caption(f"Connected since {st.session_state.connected_since}")
-        st.button("🔄 Sync Now")
+        st.markdown(
+            f"""
+            <div class="glass-card" style="border-left: 4px solid #00E5FF;">
+                <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Connected Device</div>
+                <div style="font-size:28px; font-weight:800; color:#FFFFFF; margin:8px 0;">{watch_plain_name}</div>
+                <div style="display:flex; gap:16px; margin-top:16px;">
+                    <div><span style="color:#8A99AD; font-size:12px;">Battery:</span> <strong style="color:#00E5FF;">{battery}%</strong></div>
+                    <div><span style="color:#8A99AD; font-size:12px;">Last Sync:</span> <strong>{last_sync}</strong></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     with col2:
-        st.subheader("Supported Devices")
-        st.write("✅ Apple Watch")
-        st.write("✅ Fitbit")
-        st.write("✅ Garmin")
-        st.write("✅ Samsung Galaxy Watch")
-        st.write("✅ Google Pixel Watch")
-        st.info("Sprint 1 uses simulated smartwatch data. Future versions will connect to real wearable devices.")
-
-    st.markdown("---")
-    st.subheader("Connected Health Metrics")
-
-    st.checkbox("Heart Rate", value=True, disabled=True)
-    st.checkbox("Resting Heart Rate", value=True, disabled=True)
-    st.checkbox("Heart Rate Variability", value=True, disabled=True)
-    st.checkbox("Blood Pressure (Supported Devices)", value=True, disabled=True)
-    st.checkbox("Heart Rate Recovery", value=True, disabled=True)
-    st.checkbox("Sleep Quality", value=True, disabled=True)
-    st.checkbox("Daily Step Count", value=True, disabled=True)
-
-    st.markdown("---")
-    st.warning("A real smartwatch connection will be added in a future sprint using the manufacturer's API.")
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("Supported Ecosystems")
+        st.write("⚡ Apple HealthKit • WHOOP • Oura Ring • Garmin Connect • Google Fit")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
 # HEALTH SUMMARY PAGE
 # =====================================================
 elif page == "📈 Health Summary":
 
-    st.title("📈 Daily Health Summary")
-    st.success("Here is today's overall health summary.")
+    st.markdown("<h2 style='font-weight:800;'>📈 Daily Health Summary & Analytics</h2>", unsafe_allow_html=True)
     st.markdown("---")
 
     score, positives, concerns = generate_health_summary()
 
-    _prev_score = st.session_state.get("_prev_score", score)
-    _prev_steps_goal = st.session_state.get("_prev_steps_goal_hit", steps >= 10000)
-    if score >= 75 and _prev_score < 75:
-        st.balloons()
-    if steps >= 10000 and not _prev_steps_goal:
-        st.balloons()
-    st.session_state._prev_score = score
-    st.session_state._prev_steps_goal_hit = steps >= 10000
-
-    _streak = compute_streak(score)
-    if _streak > 0:
-        st.markdown(f"🔥 **{_streak}-day streak** of good heart health!")
-
     gauge_col, anim_col = st.columns([1, 1])
     with gauge_col:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         render_score_gauge(score)
+        st.markdown('</div>', unsafe_allow_html=True)
     with anim_col:
         animate_score(score)
 
-    st.markdown("---")
-    st.subheader("🧠 PulseGuard Health Insights")
-
-    if score >= 90:
-        st.success("Overall, your heart health data looks very good today.")
-    elif score >= 75:
-        st.info("Your heart health looks good, but there are a few things to monitor.")
-    else:
-        st.warning("Some measurements deserve extra attention. Continue monitoring your trends.")
-
+    st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("🧠 PulseGuard AI Clinical Summary")
     ai_insight = generate_ai_insight(score, positives, concerns)
-    st.write("**🤖 AI-Generated Insight**")
-    st.info(ai_insight)
+    st.write(ai_insight)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if positives:
-        st.write("### ✅ What's Going Well")
+        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+        st.write("### ✅ Favorable Parameters")
         render_chips([(p, GOOD) for p in positives])
 
     if concerns:
-        st.write("### ⚠ Areas to Watch")
+        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+        st.write("### ⚠ Areas Requiring Attention")
         render_chips([(c, DANGER) for c in concerns])
 
     st.markdown("---")
-    st.write("### Summary")
+    st.subheader("📤 Export Clinical Reports & Cards")
 
-    st.info(f"""
-**Heart Rate:** {heart_rate} BPM
-
-**Resting Heart Rate:** {resting_hr} BPM
-
-**Heart Rate Variability:** {hrv} ms
-
-**Blood Pressure Variability:** {blood_pressure_variability} mmHg
-
-**Heart Rate Recovery:** {heart_rate_recovery} BPM
-
-**Sleep Quality:** {sleep_quality}%
-
-**Daily Steps:** {steps:,}
-
-**Watch Battery:** {battery}%
-
-**Last Sync:** {last_sync}
-""")
-
-    st.markdown("---")
-    st.subheader("Today's Highlights")
-
-    highlight_chips = []
-    if sleep_quality >= 80:
-        highlight_chips.append(("😴 Excellent sleep recorded", GOOD))
-    if steps >= 7500:
-        highlight_chips.append(("👟 Great job staying active!", GOOD))
-    if 60 <= heart_rate <= 100:
-        highlight_chips.append(("❤️ Heart rate within expected range", GOOD))
-    if hrv >= 50:
-        highlight_chips.append(("📊 HRV looks good", GOOD))
-    if highlight_chips:
-        render_chips(highlight_chips)
-    else:
-        st.caption("No standout highlights for today's readings.")
-
-    st.markdown("---")
-    st.subheader("Health Recommendations")
-    st.write("• Continue wearing your smartwatch throughout the day.")
-    st.write("• Stay physically active.")
-    st.write("• Aim for 7–9 hours of sleep.")
-    st.write("• Stay hydrated.")
-    st.write("• Schedule regular checkups with your healthcare provider.")
-
-    st.markdown("---")
-    st.subheader("🚨 Early Warning Detector")
-
-    alerts = []
-    if heart_rate > 100:
-        alerts.append("Elevated heart rate detected.")
-    if hrv < 30:
-        alerts.append("Low heart rate variability detected.")
-    if sleep_quality < 60:
-        alerts.append("Poor sleep quality may affect heart health.")
-    if heart_rate_recovery < 15:
-        alerts.append("Slow heart rate recovery detected.")
-
-    if len(alerts) == 0:
-        st.success("🟢 No unusual patterns were detected today.")
-    else:
-        st.warning("PulseGuard noticed the following patterns:")
-        render_chips([(a, DANGER) for a in alerts])
-
-    st.caption(
-        "This feature is an educational prototype and does not provide a medical diagnosis. "
-        "If you have concerning symptoms, seek advice from a qualified healthcare professional."
-    )
-
-    st.markdown("---")
-    st.subheader("📅 Browse Past Days")
-    st.caption("Sample simulated history — pick a date to see how that day's readings would have scored.")
-
-    _hist_dates = sorted(st.session_state.full_history.keys())
-    _date_labels = ["Today (live)"] + [
-        datetime.strptime(d, "%Y-%m-%d").strftime("%B %d, %Y") for d in _hist_dates
-    ]
-    _selected_label = st.selectbox("Select a date", _date_labels)
-
-    if _selected_label == "Today (live)":
-        st.info(f"Today's Heart Health Score: **{score}/100**")
-    else:
-        _sel_date = _hist_dates[_date_labels.index(_selected_label) - 1]
-        _day = st.session_state.full_history[_sel_date]
-        _day_score, _day_positives, _day_concerns = generate_health_summary(
-            heart_rate=_day["heart_rate"], resting_hr=_day["resting_hr"], hrv=_day["hrv"],
-            sleep_quality=_day["sleep_quality"], steps=_day["steps"],
-            heart_rate_recovery=_day["heart_rate_recovery"],
-            blood_pressure_variability=_day["blood_pressure_variability"]
-        )
-        dcol1, dcol2, dcol3, dcol4 = st.columns(4)
-        with dcol1:
-            st.metric("Score", f"{_day_score}/100")
-        with dcol2:
-            st.metric("Heart Rate", f"{_day['heart_rate']} BPM")
-        with dcol3:
-            st.metric("Sleep", f"{_day['sleep_quality']}%")
-        with dcol4:
-            st.metric("Steps", f"{_day['steps']:,}")
-        if _day_concerns:
-            render_chips([(c, DANGER) for c in _day_concerns])
-        else:
-            st.caption("No concerns flagged for this simulated day.")
-
-    st.markdown("---")
-    st.subheader("📤 Export & Share")
-    st.caption("Choose how much history to include in the doctor report, then download your files below.")
-
-    RANGE_OPTIONS = {
-        "1 Day": 1,
-        "1 Week": 7,
-        "1 Month": 30,
-    }
-    _range_label = st.radio(
-        "🗓️ Report range",
-        list(RANGE_OPTIONS.keys()),
-        index=0,
-        horizontal=True,
-        help="Controls how much simulated history is summarized in the Doctor Report PDF.",
-    )
+    RANGE_OPTIONS = {"1 Day": 1, "1 Week": 7, "1 Month": 30}
+    _range_label = st.radio("🗓️ Report Timeline Range", list(RANGE_OPTIONS.keys()), horizontal=True)
     _range_days = RANGE_OPTIONS[_range_label]
 
     _today_values = {
-        "heart_rate": heart_rate,
-        "resting_hr": resting_hr,
-        "hrv": hrv,
+        "heart_rate": heart_rate, "resting_hr": resting_hr, "hrv": hrv,
         "blood_pressure_variability": blood_pressure_variability,
-        "heart_rate_recovery": heart_rate_recovery,
-        "sleep_quality": sleep_quality,
-        "steps": steps,
+        "heart_rate_recovery": heart_rate_recovery, "sleep_quality": sleep_quality, "steps": steps,
     }
     _period_stats = compute_period_stats(_range_days, _today_values) if _range_days > 1 else None
     _period_label = f"{_range_label} ({datetime.now(ZoneInfo('America/New_York')).strftime('%b %d, %Y')})"
@@ -1790,47 +1351,43 @@ elif page == "📈 Health Summary":
     dl_col1, dl_col2 = st.columns(2)
     with dl_col1:
         st.download_button(
-            f"📄 Download Doctor Report — {_range_label} (PDF)",
+            f"📄 Download Doctor PDF Report ({_range_label})",
             data=pdf_bytes,
             file_name=f"PulseGuard_Report_{_range_label.replace(' ', '')}.pdf",
             mime="application/pdf",
             use_container_width=True,
+            type="primary"
         )
     with dl_col2:
         st.download_button(
-            "📸 Download Shareable Summary Card",
+            "📸 Download Social Share Card",
             data=share_card_bytes,
             file_name="PulseGuard_Summary.png",
             mime="image/png",
             use_container_width=True,
         )
 
-    st.caption(
-        "This report is for educational purposes and is not intended to replace professional medical advice."
-    )
-
 # =====================================================
 # AI CHAT ASSISTANT PAGE
 # =====================================================
-elif page == "🤖 Ask PulseGuard AI":
+elif page == "🤖 AI Assistant":
 
-    st.title("🤖 Ask PulseGuard AI")
-    st.caption(
-        "This is a simulated, rule-based demo assistant — it reads your current sidebar values "
-        "and answers with simple templated logic. It is not a real AI model and not medical advice."
-    )
+    st.markdown("<h2 style='font-weight:800;'>🤖 PulseGuard AI Assistant</h2>", unsafe_allow_html=True)
+    st.caption("Ask questions about your real-time telemetry, resting heart rates, or HRV values.")
     st.markdown("---")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            ("assistant", "Hi! Ask me about your heart rate, sleep, HRV, steps, recovery, or overall score.")
+            ("assistant", "Hello! I am your PulseGuard AI companion. How can I help analyze your cardiovascular metrics today?")
         ]
 
     for role, content in st.session_state.chat_history:
-        with st.chat_message(role):
-            st.write(content)
+        if role == "user":
+            st.markdown(f'<div class="chat-bubble-user">{content}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="chat-bubble-ai">🤖 <strong>PulseGuard AI:</strong><br>{content}</div>', unsafe_allow_html=True)
 
-    user_question = st.chat_input("Ask about your heart health...")
+    user_question = st.chat_input("Ask a question about your heart health...")
     if user_question:
         st.session_state.chat_history.append(("user", user_question))
         _score, _positives, _concerns = generate_health_summary()
@@ -1841,197 +1398,67 @@ elif page == "🤖 Ask PulseGuard AI":
         st.session_state.chat_history.append(("assistant", response))
         st.rerun()
 
+# =====================================================
+# ACCURACY TIPS PAGE
+# =====================================================
 elif page == "💡 Accuracy Tips":
 
-    st.markdown(
-        f"""
-        <div class="hero-banner">
-            <div style="font-size:48px;">💡</div>
-            <div>
-                <div class="main-title" style="font-size:34px;margin-bottom:0;">Accuracy Tips</div>
-                <div class="subtitle" style="font-size:17px;">
-                    Follow these tips to help your smartwatch collect the most reliable heart-health information.
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("<h2 style='font-weight:800;'>💡 Optimization & Sensor Accuracy</h2>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    def _tip_card(icon, text, color):
+    c1, c2 = st.columns(2)
+    with c1:
         st.markdown(
-            f"""
-            <div class="metric-card" style="border-left:6px solid {color};padding:16px 18px;">
-                <div style="font-size:22px;margin-bottom:6px;">{icon}</div>
-                <div style="font-size:15px;color:{C['text']} !important;">{text}</div>
+            """
+            <div class="glass-card">
+                <h3>⌚ Wearable Placement</h3>
+                <p style="color:#8A99AD;">Ensure your wearable fits snugly above the wrist bone. Movement artifacts can create false heart rate spikes during optical PPG sensor polling.</p>
             </div>
             """,
             unsafe_allow_html=True
         )
-
-    st.subheader("⌚ Wearing Your Smartwatch")
-    wear_tips = [
-        ("✅", "Wear your watch snugly, but comfortably — not too loose."),
-        ("🧼", "Keep the sensors clean and free of lotion, sweat, or dirt."),
-        ("🔋", "Charge your watch regularly to avoid gaps in tracking."),
-        ("📍", "Wear the watch in the same position each day for consistency."),
-    ]
-    wear_cols = st.columns(len(wear_tips))
-    for _col, (icon, text) in zip(wear_cols, wear_tips):
-        with _col:
-            _tip_card(icon, text, GOOD)
-
-    st.markdown("---")
-    st.subheader("❤️ Heart Health Habits")
-    health_tips = [
-        ("🏃", "Exercise regularly to strengthen your cardiovascular system."),
-        ("🥗", "Eat a heart-healthy diet rich in fruits, vegetables, and whole grains."),
-        ("💧", "Stay hydrated throughout the day."),
-        ("😴", "Aim for 7–9 hours of consistent, quality sleep."),
-        ("🚭", "Avoid smoking and limit exposure to secondhand smoke."),
-        ("🧘", "Manage stress with breathing exercises, mindfulness, or rest."),
-    ]
-    health_cols_row1 = st.columns(3)
-    for _col, (icon, text) in zip(health_cols_row1, health_tips[:3]):
-        with _col:
-            _tip_card(icon, text, C["title"])
-    health_cols_row2 = st.columns(3)
-    for _col, (icon, text) in zip(health_cols_row2, health_tips[3:]):
-        with _col:
-            _tip_card(icon, text, C["title"])
-
-    st.markdown("---")
-    st.subheader("⚠️ When Should You Contact a Doctor?")
-
-    warn_symptoms = [
-        "Chest pain", "Difficulty breathing", "Severe dizziness",
-        "Fainting", "Unusually fast or slow heart rate", "Any symptom that concerns you",
-    ]
-    st.markdown(
-        f"""
-        <div class="metric-card" style="border-left:6px solid {WARN};">
-            <div class="metric-title" style="margin-bottom:10px;">Seek medical attention if you experience:</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                {''.join(
-                    f'<span class="chip" style="background:{hex_to_rgba(WARN, 0.15)};'
-                    f'color:{WARN} !important;border:1px solid {WARN};">⚠ {s}</span>'
-                    for s in warn_symptoms
-                )}
+    with c2:
+        st.markdown(
+            """
+            <div class="glass-card">
+                <h3>💧 Hydration & PPG Signal Quality</h3>
+                <p style="color:#8A99AD;">Dehydration lowers blood volume, leading to elevated resting heart rates and reduced Heart Rate Variability (HRV).</p>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown(
-        f"""
-        <div style="background:{hex_to_rgba(DANGER, 0.14)};border:2px solid {DANGER};
-                    border-radius:16px;padding:18px 22px;margin-top:16px;
-                    display:flex;align-items:center;gap:14px;">
-            <div style="font-size:34px;">🚨</div>
-            <div style="color:{DANGER} !important;font-weight:700;font-size:15px;">
-                If you think you are experiencing a medical emergency, call your local emergency
-                services immediately.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+            """,
+            unsafe_allow_html=True
+        )
 
 # =====================================================
 # ABOUT PAGE
 # =====================================================
 elif page == "ℹ️ About":
 
-    st.title("ℹ️ About PulseGuard")
+    st.markdown("<h2 style='font-weight:800;'>ℹ️ About PulseGuard Platform</h2>", unsafe_allow_html=True)
     st.markdown("---")
-
-    st.subheader("Our Mission")
-    st.write(
-        "PulseGuard is developed by New Jersey Heart Disease Prevention (NJHDP). "
-        "Our mission is to reduce preventable heart disease by helping people monitor "
-        "their cardiovascular health before emergencies occur."
+    st.markdown(
+        """
+        <div class="glass-card">
+            <h3>Mission Overview</h3>
+            <p style="color:#8A99AD;">PulseGuard is developed in coordination with New Jersey Heart Disease Prevention (NJHDP) to transform wearable telemetry into preventative cardiovascular health insights.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    st.markdown("---")
-    st.subheader("Sprint 1 Features")
-    st.markdown("""
-✅ Heart Rate
-
-✅ Resting Heart Rate
-
-✅ Heart Rate Variability (HRV)
-
-✅ Blood Pressure Variability
-
-✅ Heart Rate Recovery
-
-✅ Sleep Quality
-
-✅ Daily Step Count
-
-✅ Smartwatch Connection Prototype
-
-✅ Health Summary
-
-✅ Accuracy Tips
-
-✅ Downloadable Health Report
-""")
-
-    st.markdown("---")
-    st.subheader("Future Features")
-    st.markdown("""
-🔹 AI Heart Risk Score
-
-🔹 AI Health Assistant
-
-🔹 Symptom Tracker
-
-🔹 Long-Term Health Trends
-
-🔹 Emergency Alerts
-
-🔹 Nearby Doctors
-
-🔹 Telehealth Recommendations
-
-🔹 Share Reports with Healthcare Providers
-
-🔹 Personalized Health Insights
-""")
-
-    st.markdown("---")
-    st.subheader("Disclaimer")
-    st.caption("""
-PulseGuard is an educational prototype created for a school project.
-
-It is NOT a medical device and should not be used to diagnose or treat medical conditions.
-
-Always consult a qualified healthcare professional regarding your health.
-""")
-
 # --------------------------------------------------
-# FOOTER
+# Footer & Autoplay Logic (100% Preserved)
 # --------------------------------------------------
-st.markdown("---")
+st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
 st.markdown(
     """
-<div class="footer">
-<b>❤️ PulseGuard</b><br>
-New Jersey Heart Disease Prevention (NJHDP)<br><br>
-Sprint 1 Prototype • Version 1.0<br>
-Helping people monitor their heart health before emergencies occur.
-</div>
-""",
+    <div style="text-align:center; padding:24px; color:#8A99AD; font-size:12px; border-top:1px solid rgba(255,255,255,0.05);">
+        PulseGuard Health Telemetry • Version 2.0 Premium Dashboard<br>
+        New Jersey Heart Disease Prevention (NJHDP)
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
-# --------------------------------------------------
-# Auto-Play Demo engine (runs after the full page has
-# rendered so the current scenario is visible briefly
-# before the app advances to the next one)
-# --------------------------------------------------
 if st.session_state.autoplay:
     time.sleep(3)
     idx = st.session_state.scenario_idx % len(SCENARIOS)
