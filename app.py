@@ -169,19 +169,38 @@ def score_color(score):
 # --------------------------------------------------
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
+/* Base layout and typography */
 html, body, [data-testid="stAppViewContainer"] {
-    background-color: #08111F !important;
-    background-image: 
-        radial-gradient(circle at 15% 15%, rgba(0, 229, 255, 0.05) 0%, transparent 40%),
-        radial-gradient(circle at 85% 20%, rgba(124, 92, 255, 0.06) 0%, transparent 40%),
-        radial-gradient(circle at 50% 80%, rgba(255, 43, 85, 0.04) 0%, transparent 50%),
-        linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px) !important;
-    background-size: 100% 100%, 100% 100%, 100% 100%, 30px 30px, 30px 30px !important;
-    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif !important;
-    color: #F0F4F8 !important;
+    background-color: #07121a !important;
+    background-image:
+        radial-gradient(circle at 12% 12%, rgba(0,229,255,0.04) 0%, transparent 38%),
+        radial-gradient(circle at 88% 18%, rgba(124,92,255,0.05) 0%, transparent 38%),
+        linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px) !important;
+    background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px !important;
+    font-family: 'Inter', -apple-system, 'Plus Jakarta Sans', sans-serif !important;
+    color: #E6F3FA !important;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+}
+
+/* Headings & hierarchy */
+h1, h2, h3, .navbar-title, .glass-card h2, .glass-card h3 {
+    font-family: 'Inter', 'Plus Jakarta Sans', sans-serif !important;
+    color: #E6F3FA !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.01em !important;
+}
+h1 { font-size: 28px; }
+h2 { font-size: 22px; }
+h3 { font-size: 18px; }
+
+/* Subtitles and captions */
+.caption, .stCaption, .glass-card .caption { color: #9fb0c0 !important; font-weight:500 !important; }
+
+section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
+    display: none !important;
 }
 
 section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
@@ -231,22 +250,22 @@ div[data-testid="column"] button[key^="nav_"] p {
 }
 
 .glass-card {
-    background: rgba(13, 23, 40, 0.65) !important;
-    backdrop-filter: blur(20px) saturate(180%) !important;
-    -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-radius: 20px !important;
-    padding: 24px !important;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
-    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    background: linear-gradient(180deg, rgba(8,18,30,0.64), rgba(10,20,34,0.56)) !important;
+    backdrop-filter: blur(14px) saturate(140%) !important;
+    -webkit-backdrop-filter: blur(14px) saturate(140%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.04) !important;
+    border-radius: 18px !important;
+    padding: 22px !important;
+    box-shadow: 0 8px 30px rgba(2,8,20,0.6), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s !important;
     position: relative;
     overflow: hidden;
 }
 
 .glass-card:hover {
-    border-color: rgba(0, 229, 255, 0.3) !important;
-    box-shadow: 0 20px 40px rgba(0, 229, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
-    transform: translateY(-3px) !important;
+    border-color: rgba(79,139,255,0.18) !important;
+    box-shadow: 0 14px 40px rgba(0, 88, 140, 0.12), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+    transform: translateY(-4px) !important;
 }
 
 .metric-card-wrapper {
@@ -338,11 +357,11 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
 }
 
 .metric-value {
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 800;
     letter-spacing: -0.02em;
     color: #FFFFFF;
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-family: 'Inter', 'Plus Jakarta Sans', sans-serif;
 }
 
 .top-navbar {
@@ -389,32 +408,53 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
 }
 
 .stButton > button {
-    border-radius: 14px !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    background: rgba(255, 255, 255, 0.03) !important;
-    color: #D1D5DB !important;
+    border-radius: 12px !important;
+    border: none !important;
+    background: linear-gradient(135deg, rgba(6,30,54,0.8), rgba(10,18,34,0.8)) !important;
+    color: #DDEFF7 !important;
     font-weight: 600 !important;
     font-size: 13.5px !important;
-    padding: 0.6rem 1.2rem !important;
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    backdrop-filter: blur(10px) !important;
+    padding: 0.6rem 1.1rem !important;
+    transition: transform 0.18s ease, box-shadow 0.18s ease !important;
+    box-shadow: 0 6px 18px rgba(3,18,35,0.6) !important;
 }
 
 .stButton > button:hover {
-    background: rgba(255, 255, 255, 0.08) !important;
-    border-color: rgba(0, 229, 255, 0.4) !important;
-    color: #00E5FF !important;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15) !important;
-    transform: translateY(-1px) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 10px 26px rgba(0,120,200,0.18) !important;
 }
 
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #00E5FF, #4F8BFF) !important;
-    color: #040914 !important;
-    border: none !important;
+    background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
+    color: #051022 !important;
     font-weight: 700 !important;
-    box-shadow: 0 4px 20px rgba(0, 229, 255, 0.35) !important;
+    box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
 }
+
+/* Inputs, selects, textareas: dark glassmorphism */
+input, textarea, select, .stTextInput>div>div>input, .stDateInput>div>div>input {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.04) !important;
+    color: #E6F3FA !important;
+    padding: 10px 12px !important;
+    border-radius: 10px !important;
+    outline: none !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+
+input::placeholder, textarea::placeholder {
+    color: rgba(230,243,250,0.55) !important;
+}
+
+input:focus, textarea:focus, select:focus, .stTextInput>div>div>input:focus {
+    box-shadow: 0 0 28px rgba(124,92,255,0.14), 0 0 8px rgba(0,229,255,0.08) !important;
+    border-color: rgba(124,92,255,0.28) !important;
+}
+
+/* Small utility tweaks */
+.metric-title { color:#9fb0c0 !important; font-weight:700 !important; }
+.metric-value, .vital-card-value { font-family: 'Inter', 'JetBrains Mono', monospace !important; }
+.report-metric-value { font-family: 'Inter', 'JetBrains Mono', monospace !important; }
 
 .progress-container {
     background: rgba(255, 255, 255, 0.05);
@@ -1086,6 +1126,156 @@ def generate_ai_insight(score, positives, concerns):
     )
     return "Based on today's readings, " + tone + body + closing
 
+
+def build_report_window(period_key, custom_start=None, custom_end=None):
+    now = datetime.now(ZoneInfo("America/New_York"))
+    today = now.date()
+
+    if period_key == "24h":
+        start_dt = datetime.combine(today, datetime.min.time(), tzinfo=ZoneInfo("America/New_York"))
+        end_dt = datetime.combine(today, datetime.max.time(), tzinfo=ZoneInfo("America/New_York"))
+        label = "Last 24 hours"
+    elif period_key == "7d":
+        start_dt = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=ZoneInfo("America/New_York"))
+        end_dt = datetime.combine(today, datetime.max.time(), tzinfo=ZoneInfo("America/New_York"))
+        label = "Last 7 days"
+    elif period_key == "30d":
+        start_dt = datetime.combine(today - timedelta(days=29), datetime.min.time(), tzinfo=ZoneInfo("America/New_York"))
+        end_dt = datetime.combine(today, datetime.max.time(), tzinfo=ZoneInfo("America/New_York"))
+        label = "Last 30 days"
+    elif period_key == "custom":
+        custom_start = custom_start or today - timedelta(days=6)
+        custom_end = custom_end or today
+        start_dt = datetime.combine(custom_start, datetime.min.time(), tzinfo=ZoneInfo("America/New_York"))
+        end_dt = datetime.combine(custom_end, datetime.max.time(), tzinfo=ZoneInfo("America/New_York"))
+        label = f"{custom_start:%b %d, %Y} to {custom_end:%b %d, %Y}"
+    else:
+        start_dt = datetime.combine(today, datetime.min.time(), tzinfo=ZoneInfo("America/New_York"))
+        end_dt = datetime.combine(today, datetime.max.time(), tzinfo=ZoneInfo("America/New_York"))
+        label = "Last 24 hours"
+
+    return start_dt, end_dt, label
+
+
+def get_report_rows(start_dt, end_dt):
+    rows = []
+    for date_key in sorted(st.session_state.full_history.keys()):
+        try:
+            row_dt = datetime.strptime(date_key, "%Y-%m-%d").replace(tzinfo=ZoneInfo("America/New_York"))
+        except ValueError:
+            continue
+        if start_dt <= row_dt <= end_dt:
+            values = st.session_state.full_history[date_key]
+            rows.append({
+                "date": row_dt.strftime("%b %d, %Y"),
+                "heart_rate": values.get("heart_rate"),
+                "resting_hr": values.get("resting_hr"),
+                "hrv": values.get("hrv"),
+                "bp": values.get("blood_pressure_variability"),
+                "recovery": values.get("heart_rate_recovery"),
+                "sleep_quality": values.get("sleep_quality"),
+                "steps": values.get("steps"),
+            })
+    return rows
+
+
+def summarize_report_rows(rows):
+    if not rows:
+        return {}
+
+    metrics = {
+        "heart_rate": [row["heart_rate"] for row in rows],
+        "resting_hr": [row["resting_hr"] for row in rows],
+        "hrv": [row["hrv"] for row in rows],
+        "bp": [row["bp"] for row in rows],
+        "recovery": [row["recovery"] for row in rows],
+        "sleep_quality": [row["sleep_quality"] for row in rows],
+        "steps": [row["steps"] for row in rows],
+    }
+
+    return {
+        "avg_heart_rate": round(sum(metrics["heart_rate"]) / len(metrics["heart_rate"])),
+        "avg_resting_hr": round(sum(metrics["resting_hr"]) / len(metrics["resting_hr"])),
+        "avg_hrv": round(sum(metrics["hrv"]) / len(metrics["hrv"])),
+        "avg_bp": round(sum(metrics["bp"]) / len(metrics["bp"])),
+        "avg_recovery": round(sum(metrics["recovery"]) / len(metrics["recovery"])),
+        "avg_sleep": round(sum(metrics["sleep_quality"]) / len(metrics["sleep_quality"])),
+        "avg_steps": round(sum(metrics["steps"]) / len(metrics["steps"])),
+        "max_steps": max(metrics["steps"]),
+        "min_steps": min(metrics["steps"]),
+    }
+
+
+def generate_doctor_report_pdf(rows, period_label, patient_name=""):
+    pdf = _PulseGuardPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+    content_width = pdf.w - pdf.l_margin - pdf.r_margin
+    generated_on = datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
+    summary = summarize_report_rows(rows)
+
+    pdf.set_fill_color(8, 17, 31)
+    pdf.rect(0, 0, pdf.w, 32, style="F")
+    pdf.set_xy(pdf.l_margin, 8)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(0, 229, 255)
+    pdf.cell(content_width, 10, _pdf_safe("PulseGuard Cardiology Report"), ln=True)
+    pdf.set_x(pdf.l_margin)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(200, 200, 200)
+    pdf.cell(content_width, 6, _pdf_safe("Prepared for clinical review"), ln=True)
+    pdf.set_y(36)
+    pdf.set_text_color(20, 20, 20)
+
+    meta_label = patient_name.strip() or "Not provided"
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Patient / User: {meta_label}"))
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Period: {period_label}"), ln=True)
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Generated On: {generated_on}"))
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Device: {st.session_state.selected_watch}"), ln=True)
+    pdf.ln(4)
+
+    _pdf_section_header(pdf, "Period Summary", content_width)
+    pdf.set_font("Helvetica", "", 10.5)
+    summary_rows = [
+        ("Average Heart Rate", f"{summary.get('avg_heart_rate', 'n/a')} BPM"),
+        ("Average Resting HR", f"{summary.get('avg_resting_hr', 'n/a')} BPM"),
+        ("Average HRV", f"{summary.get('avg_hrv', 'n/a')} ms"),
+        ("Average BP Variability", f"{summary.get('avg_bp', 'n/a')} mmHg"),
+        ("Average Recovery", f"{summary.get('avg_recovery', 'n/a')} BPM"),
+        ("Average Sleep Quality", f"{summary.get('avg_sleep', 'n/a')}%"),
+        ("Average Daily Steps", f"{summary.get('avg_steps', 'n/a'):,}"),
+        ("Highest Steps", f"{summary.get('max_steps', 'n/a'):,}"),
+    ]
+    label_width = 95
+    value_width = content_width - label_width
+    for i, (label, value) in enumerate(summary_rows):
+        fill = (245, 245, 245) if i % 2 == 0 else (255, 255, 255)
+        pdf.set_fill_color(*fill)
+        pdf.set_draw_color(225, 225, 225)
+        pdf.cell(label_width, 8, "  " + _pdf_safe(label), border="B", fill=True)
+        pdf.cell(value_width, 8, _pdf_safe(value), border="B", fill=True, ln=True)
+    pdf.ln(5)
+
+    _pdf_section_header(pdf, "Daily Telemetry Log", content_width)
+    pdf.set_font("Helvetica", "", 9.5)
+    if not rows:
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(content_width, 6, _pdf_safe("No telemetry entries were available for the selected window."))
+    else:
+        for row in rows:
+            pdf.set_x(pdf.l_margin)
+            entry_text = (
+                f"{row['date']} — HR {row['heart_rate']} BPM | Resting HR {row['resting_hr']} BPM | "
+                f"HRV {row['hrv']} ms | BP var {row['bp']} mmHg | Recovery {row['recovery']} BPM | "
+                f"Sleep {row['sleep_quality']}% | Steps {row['steps']:,}"
+            )
+            pdf.multi_cell(content_width, 6, _pdf_safe(entry_text))
+            pdf.ln(1)
+
+    return bytes(pdf.output())
+
+
 def _pdf_safe(text):
     return text.encode("latin-1", "ignore").decode("latin-1")
 
@@ -1629,6 +1819,163 @@ elif page == "📈 Health Summary":
         st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
         st.write("### ⚠ Areas Requiring Attention")
         render_chips([(c, DANGER) for c in concerns])
+
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+    # Report card with enhanced contrast for readability
+    st.markdown(
+        """
+        <style>
+        /* Report card specific contrast tweaks */
+        #report-card { color: #EAF6FF !important; }
+        #report-card .report-metric-value { color: #FFFFFF !important; font-weight:800; font-size:36px; opacity:1 !important; text-shadow: 0 2px 10px rgba(0,0,0,0.6); }
+        #report-card .report-metric-label { color:#9fb0c0 !important; font-size:12px; margin-top:6px; }
+        /* Make report inputs/buttons follow the global blue glass style (no white boxes) */
+        /* Cover Streamlit DOM variants: text inputs, date inputs, selectbox buttons, baseweb select, comboboxes */
+        #report-card input, #report-card textarea, #report-card select,
+        #report-card .stTextInput>div>div>input, #report-card .stDateInput>div>div>input,
+        #report-card div[data-baseweb="select"] div, #report-card div[role="combobox"] input,
+        #report-card .stSelectbox > div > button, #report-card [data-testid="stSelectbox"] button {
+            background: rgba(0,229,255,0.04) !important;
+            border: 1px solid rgba(0,229,255,0.12) !important;
+            color: #E6F3FA !important;
+            padding: 10px 12px !important;
+            border-radius: 10px !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02) !important;
+        }
+        #report-card input::placeholder, #report-card textarea::placeholder { color: rgba(230,243,250,0.6) !important; }
+        /* Also target Streamlit container divs and data-testid wrappers which sometimes render white backgrounds */
+        #report-card [data-testid="stTextInput"] div, #report-card [data-testid="stTextInput"] input,
+        #report-card [data-testid="stDateInput"] div, #report-card [data-testid="stDateInput"] input,
+        #report-card [data-testid="stSelectbox"] div, #report-card [data-testid="stSelectbox"] button,
+        #report-card .stTextInput>div, #report-card .stTextInput>div>div, #report-card .stDateInput>div, #report-card .stDateInput>div>div {
+            background: rgba(0,229,255,0.04) !important;
+            border: 1px solid rgba(0,229,255,0.12) !important;
+            color: #E6F3FA !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02) !important;
+        }
+        #report-card button, #report-card a, #report-card .stSelectbox > div > button { background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important; color: #051022 !important; border-radius:10px !important; border:none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div id="report-card" class="glass-card">', unsafe_allow_html=True)
+    st.subheader("🩺 Download Doctor Report")
+    st.caption("Choose a reporting window and export a PDF summary for your clinician.")
+
+    st.text_input("Patient name", key="patient_name", placeholder="Enter patient or user name")
+
+    period_key = st.selectbox(
+        "Report window",
+        ["24h", "7d", "30d", "custom"],
+        format_func=lambda option: {
+            "24h": "Last 24 hours",
+            "7d": "Last 7 days",
+            "30d": "Last 30 days",
+            "custom": "Custom date range",
+        }[option],
+        index=1,
+    )
+
+    if period_key == "custom":
+        custom_start_col, custom_end_col = st.columns(2)
+        with custom_start_col:
+            start_date = st.date_input("Start date", value=datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=6))
+        with custom_end_col:
+            end_date = st.date_input("End date", value=datetime.now(ZoneInfo("America/New_York")).date())
+        if end_date < start_date:
+            st.warning("End date must be after the start date.")
+            report_ready = False
+        else:
+            report_ready = True
+    else:
+        start_date = None
+        end_date = None
+        report_ready = True
+
+    if report_ready:
+        start_dt, end_dt, period_label = build_report_window(period_key, start_date, end_date)
+        report_rows = get_report_rows(start_dt, end_dt)
+        summary = summarize_report_rows(report_rows)
+
+        if report_rows:
+            st.write(f"Selected range: {period_label} • {len(report_rows)} daily entries")
+            # Render high-contrast metrics with controlled styling for readability
+            mcols = st.columns(4)
+            labels = ["Avg Heart Rate", "Avg Sleep", "Avg Steps", "Peak Steps"]
+            values = [
+                f"{summary.get('avg_heart_rate', 'n/a')} BPM",
+                f"{summary.get('avg_sleep', 'n/a')}%",
+                f"{summary.get('avg_steps', 'n/a'):,}",
+                f"{summary.get('max_steps', 'n/a'):,}",
+            ]
+            for col, lab, val in zip(mcols, labels, values):
+                with col:
+                    st.markdown(
+                        f"""
+                        <div style='text-align:left; padding:12px 8px;'>
+                            <div class='report-metric-value'>{val}</div>
+                            <div class='report-metric-label'>{lab}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+        else:
+            st.info("No telemetry history is available for the selected range.")
+
+        pdf_bytes = generate_doctor_report_pdf(report_rows, period_label, patient_name=st.session_state.get("patient_name", ""))
+        st.download_button(
+            label="⬇️ Download PDF for Doctor",
+            data=pdf_bytes,
+            file_name=f"pulseguard_{period_key}_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+        # Robust runtime styling: MutationObserver that reapplies blue glass styles
+        components.html(
+            """
+            <script>
+            (function(){
+                const bg = 'rgba(0,229,255,0.04)';
+                const border = '1px solid rgba(0,229,255,0.12)';
+                const color = '#E6F3FA';
+                const selectors = [
+                    '#report-card input', '#report-card textarea', '#report-card select', '#report-card button',
+                    '#report-card [data-testid="stTextInput"] input', '#report-card [data-testid="stDateInput"] input',
+                    '#report-card [data-testid="stSelectbox"] button', '#report-card div[data-baseweb] input',
+                    '#report-card .stTextInput>div>div>input', '#report-card .stDateInput>div>div>input', '#report-card .stSelectbox > div > button'
+                ];
+
+                function applyOnce(){
+                    selectors.forEach(s => {
+                        document.querySelectorAll(s).forEach(el => {
+                            try{
+                                el.style.setProperty('background', bg, 'important');
+                                el.style.setProperty('border', border, 'important');
+                                el.style.setProperty('color', color, 'important');
+                                el.style.setProperty('box-shadow', 'inset 0 1px 0 rgba(255,255,255,0.02)', 'important');
+                                el.style.setProperty('border-radius', '10px', 'important');
+                            }catch(e){}
+                        });
+                    });
+                }
+
+                // Apply immediately and periodically to catch Streamlit's render timings
+                applyOnce();
+                const interval = setInterval(applyOnce, 300);
+
+                // Observe DOM changes and reapply when nodes are added
+                const obs = new MutationObserver((mutations) => { applyOnce(); });
+                obs.observe(document.body, { childList: true, subtree: true });
+
+                // Stop after 10s to avoid indefinite work
+                setTimeout(()=>{ clearInterval(interval); obs.disconnect(); }, 10000);
+            })();
+            </script>
+            """,
+            height=10,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
 # AI CHAT ASSISTANT PAGE
