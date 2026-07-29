@@ -469,6 +469,7 @@ def render_3d_heart():
                 padding: 12px 24px; color: #FFFFFF; font-size: 13px; font-weight: 600;
                 text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
                 pointer-events: none; transition: all 0.3s ease;
+                z-index: 10;
             }
             .part-tag { color: #00E5FF; font-weight: 700; }
         </style>
@@ -477,7 +478,7 @@ def render_3d_heart():
     </head>
     <body>
         <div id="container">
-            <div id="infoBox">💡 Drag to rotate the 3D heart model • Scroll to zoom • Click/Hover hotspots</div>
+            <div id="infoBox">💡 Drag to rotate • Scroll to zoom • Hover glowing nodes for details</div>
         </div>
         <script>
             const container = document.getElementById('container');
@@ -555,15 +556,15 @@ def render_3d_heart():
             rightAtrium.position.set(-1.4, 1.8, -0.3);
             heartGroup.add(rightAtrium);
 
-            // Interactive Hotspots setup
+            // Hotspot setup
             const hotspotGeo = new THREE.SphereGeometry(0.2, 16, 16);
             const hotspotMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
 
             const hotspots = [
-                { pos: new THREE.Vector3(0, 3.8, 0.2), title: "AORTA", desc: "Main artery routing oxygenated blood to the body." },
-                { pos: new THREE.Vector3(0.8, -0.5, 1.8), title: "LEFT VENTRICLE", desc: "Primary pumping chamber sending blood systemic." },
-                { pos: new THREE.Vector3(-1.5, 1.8, 0.8), title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from body." },
-                { pos: new THREE.Vector3(0, 0.5, 2.1), title: "CORONARY ARTERY", desc: "Supplies oxygen-rich blood directly to cardiac tissue." }
+                { pos: new THREE.Vector3(0, 3.8, 0.2), title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation." },
+                { pos: new THREE.Vector3(0.8, -0.5, 1.8), title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body." },
+                { pos: new THREE.Vector3(-1.5, 1.8, 0.8), title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from systemic veins." },
+                { pos: new THREE.Vector3(0, 0.5, 2.1), title: "CORONARY ARTERY", desc: "Supplies oxygenated blood directly to cardiac tissue." }
             ];
 
             const hotspotMeshes = [];
@@ -577,7 +578,7 @@ def render_3d_heart():
 
             scene.add(heartGroup);
 
-            // Raycasting setup
+            // Raycasting for interactivity
             const raycaster = new THREE.Raycaster();
             const mouse = new THREE.Vector2();
             const infoBox = document.getElementById('infoBox');
@@ -598,17 +599,17 @@ def render_3d_heart():
                 }
             });
 
-            // Smooth Pulsing Animation
+            // Heartbeat Pulse Animation Loop
             let clock = new THREE.Clock();
             function animate() {
                 requestAnimationFrame(animate);
                 let elapsedTime = clock.getElapsedTime();
 
-                // Heart beat scaling effect
+                // Realistic double-thump pulse scale
                 let beat = 1 + Math.sin(elapsedTime * 4) * 0.03 + Math.sin(elapsedTime * 8) * 0.015;
                 mainHeart.scale.set(beat, beat * 1.3, beat * 0.9);
 
-                // Idle rotation
+                // Idle Rotation
                 heartGroup.rotation.y += 0.005;
 
                 // Hotspot pulse
