@@ -199,6 +199,72 @@ section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-
     border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* Pill-style Tabs (AquaPure-inspired) */
+div[data-testid="stTabs"] div[data-baseweb="tab-list"] {
+    background: rgba(255, 255, 255, 0.05) !important;
+    padding: 6px !important;
+    border-radius: 999px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    gap: 4px !important;
+    width: fit-content !important;
+}
+
+div[data-testid="stTabs"] div[data-baseweb="tab-highlight"],
+div[data-testid="stTabs"] div[data-baseweb="tab-border"] {
+    display: none !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"] {
+    border-radius: 999px !important;
+    padding: 8px 22px !important;
+    color: #8A99AD !important;
+    font-weight: 700 !important;
+    font-size: 12.5px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    background: transparent !important;
+    transition: all 0.25s ease !important;
+    border: none !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+    color: #00E5FF !important;
+    background: rgba(0, 229, 255, 0.08) !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+    background: rgba(0, 229, 255, 0.15) !important;
+    color: #00E5FF !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 0 1px rgba(0, 229, 255, 0.3) !important;
+}
+
+div[data-testid="stTabs"] div[data-testid="stMarkdownContainer"] p {
+    margin-bottom: 0 !important;
+}
+
+/* Heart structure reference chips */
+.heart-struct-card {
+    background: rgba(13, 23, 40, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-left: 3px solid #00E5FF;
+    border-radius: 12px;
+    padding: 14px 16px;
+    height: 100%;
+}
+.heart-struct-title {
+    color: #00E5FF;
+    font-weight: 800;
+    font-size: 12.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.heart-struct-desc {
+    color: #8A99AD;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
 .metric-title {
     font-size: 13px;
     font-weight: 600;
@@ -550,6 +616,28 @@ def render_ecg_animation(hr):
     """
     components.html(html_code, height=155)
 
+HEART_STRUCTURES = [
+    {"title": "Aorta", "desc": "The main artery routing freshly oxygenated blood from the heart out to the rest of the body."},
+    {"title": "Left Ventricle", "desc": "The heart's primary pumping chamber — thick, muscular, and responsible for sending blood to the entire body."},
+    {"title": "Right Atrium", "desc": "Receives deoxygenated blood returning from the body's veins before it's sent to the lungs."},
+    {"title": "Coronary Artery", "desc": "Supplies oxygenated blood directly to the heart muscle itself, keeping the heart alive."},
+    {"title": "Right Ventricle", "desc": "Pumps deoxygenated blood onward to the lungs via the pulmonary artery to be re-oxygenated."},
+]
+
+def render_heart_structure_reference():
+    cols = st.columns(len(HEART_STRUCTURES))
+    for _col, _struct in zip(cols, HEART_STRUCTURES):
+        with _col:
+            st.markdown(
+                f"""
+                <div class="heart-struct-card">
+                    <div class="heart-struct-title">📍 {_struct['title']}</div>
+                    <div class="heart-struct-desc">{_struct['desc']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
 def render_3d_heart(hr=72):
     # Points at the real heart model file in your GitHub repo, served via jsDelivr's CDN
     # (works instantly for any public repo, no server setup needed).
@@ -759,6 +847,7 @@ def render_3d_heart(hr=72):
             const mouse = new THREE.Vector2();
             const infoBox = document.getElementById('infoBox');
             const defaultInfo = infoBox.innerHTML;
+            let isHoveringHotspot = false;
 
             function updatePointer(clientX, clientY) {{
                 const rect = renderer.domElement.getBoundingClientRect();
@@ -772,9 +861,11 @@ def render_3d_heart(hr=72):
                     const data = intersects[0].object.userData;
                     infoBox.innerHTML = `<span class="part-tag">📍 ${{data.title}}:</span> ${{data.desc}}`;
                     container.style.cursor = 'pointer';
+                    isHoveringHotspot = true;
                 }} else {{
                     infoBox.innerHTML = defaultInfo;
                     container.style.cursor = 'default';
+                    isHoveringHotspot = false;
                 }}
             }}
 
@@ -794,7 +885,9 @@ def render_3d_heart(hr=72):
 
                 const pulse = 1 + Math.sin(t * 4) * 0.035 + Math.max(0, Math.sin(t * 8)) * 0.02;
                 heartGroup.scale.set(pulse, pulse, pulse);
-                heartGroup.rotation.y += 0.004;
+                if (!isHoveringHotspot) {{
+                    heartGroup.rotation.y += 0.0012;
+                }}
 
                 hotspotMeshes.forEach(m => {{
                     const s = 1 + Math.sin(t * 6 + m.position.x) * 0.25;
@@ -1499,42 +1592,52 @@ elif page == "❤️ Heart Dashboard":
     st.caption("Deep-dive metrics evaluating real-time heart rate dynamics and autonomic recovery.")
     st.markdown("---")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        _, color, _ = metric_status("heart_rate", heart_rate)
-        render_metric_card("Heart Rate", f"{heart_rate} BPM", color)
-    with col2:
-        _, color, _ = metric_status("resting_hr", resting_hr)
-        render_metric_card("Resting Heart Rate", f"{resting_hr} BPM", color)
-    with col3:
-        _, color, _ = metric_status("hrv", hrv)
-        render_metric_card("Heart Rate Variability", f"{hrv} ms", color)
+    tab_vitals, tab_3d, tab_ecg = st.tabs(["📊 VITALS", "🫀 3D MODEL", "💓 ECG WAVEFORM"])
 
-    st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
+    with tab_vitals:
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            _, color, _ = metric_status("heart_rate", heart_rate)
+            render_metric_card("Heart Rate", f"{heart_rate} BPM", color)
+        with col2:
+            _, color, _ = metric_status("resting_hr", resting_hr)
+            render_metric_card("Resting Heart Rate", f"{resting_hr} BPM", color)
+        with col3:
+            _, color, _ = metric_status("hrv", hrv)
+            render_metric_card("Heart Rate Variability", f"{hrv} ms", color)
 
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        _, color, _ = metric_status("bp_variability", blood_pressure_variability)
-        render_metric_card("Blood Pressure Variability", f"{blood_pressure_variability} mmHg", color)
-    with col5:
-        _, color, _ = metric_status("recovery", heart_rate_recovery)
-        render_metric_card("Heart Rate Recovery", f"{heart_rate_recovery} BPM", color)
-    with col6:
-        _, color, _ = metric_status("sleep", sleep_quality)
-        render_metric_card("Sleep Quality", f"{sleep_quality}%", color)
+        st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("🫀 Interactive 3D Anatomical Heart")
-    st.caption("Drag to rotate, scroll to zoom, hover the glowing nodes to explore key structures. Beat speed follows your live heart rate.")
-    render_3d_heart(heart_rate)
-    st.markdown('</div>', unsafe_allow_html=True)
+        col4, col5, col6 = st.columns(3)
+        with col4:
+            _, color, _ = metric_status("bp_variability", blood_pressure_variability)
+            render_metric_card("Blood Pressure Variability", f"{blood_pressure_variability} mmHg", color)
+        with col5:
+            _, color, _ = metric_status("recovery", heart_rate_recovery)
+            render_metric_card("Heart Rate Recovery", f"{heart_rate_recovery} BPM", color)
+        with col6:
+            _, color, _ = metric_status("sleep", sleep_quality)
+            render_metric_card("Sleep Quality", f"{sleep_quality}%", color)
 
-    st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("💓 Simulated Real-Time Waveform (ECG)")
-    render_ecg_animation(heart_rate)
-    st.markdown('</div>', unsafe_allow_html=True)
+    with tab_3d:
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("🫀 Interactive 3D Anatomical Heart")
+        st.caption("Drag to rotate, scroll to zoom, hover the glowing nodes to explore key structures. Beat speed follows your live heart rate.")
+        render_3d_heart(heart_rate)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-bottom:20px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:13px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>Heart Structures Reference</div>", unsafe_allow_html=True)
+        render_heart_structure_reference()
+
+    with tab_ecg:
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("💓 Simulated Real-Time Waveform (ECG)")
+        render_ecg_animation(heart_rate)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
 # SMARTWATCH CONNECTION PAGE
