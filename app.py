@@ -1718,10 +1718,4 @@ st.markdown(
 )
 
 if st.session_state.autoplay:
-    time.sleep(3)
-    idx = st.session_state.scenario_idx % len(SCENARIOS)
-    scenario = SCENARIOS[idx]
-    for _k, _v in scenario.items():
-        st.session_state[_k] = _v
-    st.session_state.scenario_idx = idx + 1
-    st.rerun()
+    time.sleep
