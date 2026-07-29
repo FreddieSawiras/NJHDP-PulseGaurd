@@ -23,14 +23,6 @@ st.set_page_config(
 # --------------------------------------------------
 # Safe HTML rendering patch
 # --------------------------------------------------
-# Streamlit's markdown parser follows normal Markdown rules: any line that
-# starts with 4+ spaces of indentation gets treated as a preformatted code
-# block instead of HTML. Since our HTML snippets are written as indented
-# Python triple-quoted strings (for readability in the source file), that
-# indentation was being taken literally by the renderer — causing raw
-# HTML/CSS tags to print on screen as text, and some cards to render empty.
-# This wrapper strips leading whitespace from every line before handing it
-# to Streamlit, so indentation in the source code never affects rendering.
 _original_markdown = st.markdown
 
 def _safe_markdown(body, *args, **kwargs):
@@ -198,10 +190,6 @@ h3 { font-size: 18px; }
 
 /* Subtitles and captions */
 .caption, .stCaption, .glass-card .caption { color: #9fb0c0 !important; font-weight:500 !important; }
-
-section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
-    display: none !important;
-}
 
 section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
     display: none !important;
@@ -431,10 +419,10 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
     box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
 }
 
-/* Inputs, selects, textareas: dark glassmorphism */
+/* Base styles for global text inputs, select elements, containers */
 input, textarea, select, .stTextInput>div>div>input, .stDateInput>div>div>input {
     background: rgba(255,255,255,0.03) !important;
-    border: 1px solid rgba(255,255,255,0.04) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
     color: #E6F3FA !important;
     padding: 10px 12px !important;
     border-radius: 10px !important;
@@ -451,7 +439,23 @@ input:focus, textarea:focus, select:focus, .stTextInput>div>div>input:focus {
     border-color: rgba(124,92,255,0.28) !important;
 }
 
-/* Small utility tweaks */
+/* Universal Streamlit Input Box Styling Override (Fixes White Box Issue Globally) */
+div[data-baseweb="input"], 
+div[data-baseweb="select"] > div,
+div[data-testid="stTextInput"] > div > div,
+div[data-testid="stSelectbox"] > div > div {
+    background-color: rgba(13, 23, 40, 0.75) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 10px !important;
+    color: #E6F3FA !important;
+}
+
+div[data-baseweb="input"] input, 
+div[data-baseweb="select"] input {
+    color: #E6F3FA !important;
+    background-color: transparent !important;
+}
+
 .metric-title { color:#9fb0c0 !important; font-weight:700 !important; }
 .metric-value, .vital-card-value { font-family: 'Inter', 'JetBrains Mono', monospace !important; }
 .report-metric-value { font-family: 'Inter', 'JetBrains Mono', monospace !important; }
@@ -1459,7 +1463,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Pill Navigation Bar - Forces Strict Even Sizing Across All Pills
+# Pill Navigation Bar
 _nav_cols = st.columns(len(NAV_ITEMS))
 for _col, _item in zip(_nav_cols, NAV_ITEMS):
     with _col:
@@ -1529,7 +1533,7 @@ watch_connected = True
 last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
 
 # =====================================================
-# HOME PAGE (REDESIGNED VIRTUAL HUB)
+# HOME PAGE
 # =====================================================
 if page == "🏠 Home":
 
@@ -1539,7 +1543,6 @@ if page == "🏠 Home":
     current_hour = datetime.now(ZoneInfo("America/New_York")).hour
     time_greeting = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 18 else "Good evening")
 
-    # 1. Hero Section & Live Pulse Status Bar
     st.markdown(
         f"""
         <div class="glass-card" style="padding:28px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.95) 0%, rgba(8, 17, 31, 0.98) 100%);">
@@ -1577,7 +1580,6 @@ if page == "🏠 Home":
 
     st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
 
-    # 2. Today's Focus Action Card
     focus_insight = "Your HRV dipped slightly below average today. A brief 10-minute walk or controlled breathing exercise will promote parasympathetic recovery."
     if st.session_state.hrv >= 60:
         focus_insight = "Your HRV is exceptional today! Your body is fully recovered and primed for optimal physical performance."
@@ -1603,7 +1605,6 @@ if page == "🏠 Home":
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
-    # 3. Quick Actions Bar
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
     qa_cols = st.columns(4)
     with qa_cols[0]:
@@ -1629,7 +1630,6 @@ if page == "🏠 Home":
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
-    # 4. Main Metric Cards with Micro-Trends & Context Comparison
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>📊 Core Telemetry Metrics</div>", unsafe_allow_html=True)
     
     hr_status, hr_color, _ = metric_status("heart_rate", heart_rate)
@@ -1649,7 +1649,6 @@ if page == "🏠 Home":
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
-    # 5. Activity Timeline & Habit Rings Grid
     col_timeline, col_habits = st.columns([1, 1])
 
     with col_timeline:
@@ -1821,39 +1820,44 @@ elif page == "📈 Health Summary":
         render_chips([(c, DANGER) for c in concerns])
 
     st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
-    # Report card with enhanced contrast for readability
+    
+    # Custom styling applied to the Doctor Report section to override Streamlit defaults
     st.markdown(
         """
         <style>
-        /* Report card specific contrast tweaks */
+        /* Report card theme matching overall glass style */
         #report-card { color: #EAF6FF !important; }
         #report-card .report-metric-value { color: #FFFFFF !important; font-weight:800; font-size:36px; opacity:1 !important; text-shadow: 0 2px 10px rgba(0,0,0,0.6); }
         #report-card .report-metric-label { color:#9fb0c0 !important; font-size:12px; margin-top:6px; }
-        /* Make report inputs/buttons follow the global blue glass style (no white boxes) */
-        /* Cover Streamlit DOM variants: text inputs, date inputs, selectbox buttons, baseweb select, comboboxes */
-        #report-card input, #report-card textarea, #report-card select,
-        #report-card .stTextInput>div>div>input, #report-card .stDateInput>div>div>input,
-        #report-card div[data-baseweb="select"] div, #report-card div[role="combobox"] input,
-        #report-card .stSelectbox > div > button, #report-card [data-testid="stSelectbox"] button {
-            background: rgba(0,229,255,0.04) !important;
-            border: 1px solid rgba(0,229,255,0.12) !important;
+
+        /* Direct native input overrides to enforce dark background & match UI scheme */
+        #report-card input[type="text"],
+        #report-card div[data-baseweb="select"] > div,
+        #report-card div[data-baseweb="input"] > div,
+        #report-card .stTextInput input,
+        #report-card .stSelectbox [data-baseweb="select"] {
+            background-color: rgba(13, 23, 40, 0.75) !important;
+            border: 1px solid rgba(255, 255, 255, 0.12) !important;
             color: #E6F3FA !important;
-            padding: 10px 12px !important;
             border-radius: 10px !important;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02) !important;
         }
-        #report-card input::placeholder, #report-card textarea::placeholder { color: rgba(230,243,250,0.6) !important; }
-        /* Also target Streamlit container divs and data-testid wrappers which sometimes render white backgrounds */
-        #report-card [data-testid="stTextInput"] div, #report-card [data-testid="stTextInput"] input,
-        #report-card [data-testid="stDateInput"] div, #report-card [data-testid="stDateInput"] input,
-        #report-card [data-testid="stSelectbox"] div, #report-card [data-testid="stSelectbox"] button,
-        #report-card .stTextInput>div, #report-card .stTextInput>div>div, #report-card .stDateInput>div, #report-card .stDateInput>div>div {
-            background: rgba(0,229,255,0.04) !important;
-            border: 1px solid rgba(0,229,255,0.12) !important;
-            color: #E6F3FA !important;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02) !important;
+
+        /* Download Button Styling - Dark Primary Gradient */
+        #report-card button[kind="primary"],
+        #report-card div.stDownloadButton > button {
+            background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
+            color: #051022 !important;
+            font-weight: 700 !important;
+            border-radius: 12px !important;
+            border: none !important;
+            box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
+            transition: all 0.2s ease !important;
         }
-        #report-card button, #report-card a, #report-card .stSelectbox > div > button { background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important; color: #051022 !important; border-radius:10px !important; border:none !important; }
+        #report-card button[kind="primary"]:hover,
+        #report-card div.stDownloadButton > button:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 10px 35px rgba(0,229,255,0.4) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1863,6 +1867,7 @@ elif page == "📈 Health Summary":
     st.subheader("🩺 Download Doctor Report")
     st.caption("Choose a reporting window and export a PDF summary for your clinician.")
 
+    # Render Patient Name above the Report Window selector
     st.text_input("Patient name", key="patient_name", placeholder="Enter patient or user name")
 
     period_key = st.selectbox(
@@ -1900,7 +1905,6 @@ elif page == "📈 Health Summary":
 
         if report_rows:
             st.write(f"Selected range: {period_label} • {len(report_rows)} daily entries")
-            # Render high-contrast metrics with controlled styling for readability
             mcols = st.columns(4)
             labels = ["Avg Heart Rate", "Avg Sleep", "Avg Steps", "Peak Steps"]
             values = [
@@ -1924,6 +1928,8 @@ elif page == "📈 Health Summary":
             st.info("No telemetry history is available for the selected range.")
 
         pdf_bytes = generate_doctor_report_pdf(report_rows, period_label, patient_name=st.session_state.get("patient_name", ""))
+        
+        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
         st.download_button(
             label="⬇️ Download PDF for Doctor",
             data=pdf_bytes,
@@ -1931,50 +1937,7 @@ elif page == "📈 Health Summary":
             mime="application/pdf",
             use_container_width=True,
         )
-        # Robust runtime styling: MutationObserver that reapplies blue glass styles
-        components.html(
-            """
-            <script>
-            (function(){
-                const bg = 'rgba(0,229,255,0.04)';
-                const border = '1px solid rgba(0,229,255,0.12)';
-                const color = '#E6F3FA';
-                const selectors = [
-                    '#report-card input', '#report-card textarea', '#report-card select', '#report-card button',
-                    '#report-card [data-testid="stTextInput"] input', '#report-card [data-testid="stDateInput"] input',
-                    '#report-card [data-testid="stSelectbox"] button', '#report-card div[data-baseweb] input',
-                    '#report-card .stTextInput>div>div>input', '#report-card .stDateInput>div>div>input', '#report-card .stSelectbox > div > button'
-                ];
 
-                function applyOnce(){
-                    selectors.forEach(s => {
-                        document.querySelectorAll(s).forEach(el => {
-                            try{
-                                el.style.setProperty('background', bg, 'important');
-                                el.style.setProperty('border', border, 'important');
-                                el.style.setProperty('color', color, 'important');
-                                el.style.setProperty('box-shadow', 'inset 0 1px 0 rgba(255,255,255,0.02)', 'important');
-                                el.style.setProperty('border-radius', '10px', 'important');
-                            }catch(e){}
-                        });
-                    });
-                }
-
-                // Apply immediately and periodically to catch Streamlit's render timings
-                applyOnce();
-                const interval = setInterval(applyOnce, 300);
-
-                // Observe DOM changes and reapply when nodes are added
-                const obs = new MutationObserver((mutations) => { applyOnce(); });
-                obs.observe(document.body, { childList: true, subtree: true });
-
-                // Stop after 10s to avoid indefinite work
-                setTimeout(()=>{ clearInterval(interval); obs.disconnect(); }, 10000);
-            })();
-            </script>
-            """,
-            height=10,
-        )
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
