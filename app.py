@@ -54,11 +54,16 @@ _defaults = {
     "streak_days": 12,
     "logged_symptoms": [],
     "meds_state": {"BP Medication": True, "Omega-3": True, "Magnesium": False},
+    "patient_name": "",
 }
 
 for _key, _val in _defaults.items():
     if _key not in st.session_state:
         st.session_state[_key] = _val
+
+
+def commit_patient_name():
+    st.session_state.patient_name = st.session_state.get("patient_name", "")
 
 if "connected_since" not in st.session_state:
     fake_days_ago = random.randint(2, 45)
@@ -421,8 +426,8 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
 
 /* Base styles for global text inputs, select elements, containers */
 input, textarea, select, .stTextInput>div>div>input, .stDateInput>div>div>input {
-    background: rgba(255,255,255,0.03) !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
+    background: rgba(13, 23, 40, 0.75) !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
     color: #E6F3FA !important;
     padding: 10px 12px !important;
     border-radius: 10px !important;
@@ -454,6 +459,23 @@ div[data-baseweb="input"] input,
 div[data-baseweb="select"] input {
     color: #E6F3FA !important;
     background-color: transparent !important;
+}
+
+/* Universal Streamlit Download Button Override */
+div.stDownloadButton > button {
+    background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
+    color: #051022 !important;
+    font-weight: 700 !important;
+    border-radius: 12px !important;
+    border: none !important;
+    padding: 0.6rem 1.1rem !important;
+    box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
+    transition: all 0.2s ease !important;
+}
+
+div.stDownloadButton > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 10px 35px rgba(0,229,255,0.4) !important;
 }
 
 .metric-title { color:#9fb0c0 !important; font-weight:700 !important; }
@@ -1231,7 +1253,10 @@ def generate_doctor_report_pdf(rows, period_label, patient_name=""):
     pdf.set_y(36)
     pdf.set_text_color(20, 20, 20)
 
-    meta_label = patient_name.strip() or "Not provided"
+    # Connecting patient_name explicitly from parameter or session state
+    actual_name = patient_name.strip() or st.session_state.get("patient_name", "").strip()
+    meta_label = actual_name if actual_name else "Not provided"
+    
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Patient / User: {meta_label}"))
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Period: {period_label}"), ln=True)
@@ -1322,7 +1347,9 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(90, 90, 90)
-    meta_label = patient_name.strip() or "Not provided"
+    actual_name = patient_name.strip() or st.session_state.get("patient_name", "").strip()
+    meta_label = actual_name if actual_name else "Not provided"
+    
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Patient / User: {meta_label}"))
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Period: {period_label}"), ln=True)
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Generated: {generated_on} ({last_sync} ET)"))
@@ -1867,8 +1894,13 @@ elif page == "📈 Health Summary":
     st.subheader("🩺 Download Doctor Report")
     st.caption("Choose a reporting window and export a PDF summary for your clinician.")
 
-    # Render Patient Name above the Report Window selector
-    st.text_input("Patient name", key="patient_name", placeholder="Enter patient or user name")
+    # Render Patient Name above the Report Window selector and save to session_state
+    patient_name = st.text_input(
+        "Patient name",
+        key="patient_name",
+        placeholder="Enter patient or user name",
+        on_change=commit_patient_name,
+    )
 
     period_key = st.selectbox(
         "Report window",
@@ -1927,7 +1959,7 @@ elif page == "📈 Health Summary":
         else:
             st.info("No telemetry history is available for the selected range.")
 
-        pdf_bytes = generate_doctor_report_pdf(report_rows, period_label, patient_name=st.session_state.get("patient_name", ""))
+        pdf_bytes = generate_doctor_report_pdf(report_rows, period_label, patient_name=patient_name)
         
         st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
         st.download_button(
