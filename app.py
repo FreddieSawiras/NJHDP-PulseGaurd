@@ -1,1029 +1,1645 @@
 import streamlit as st
-import base64
-import os
+import streamlit.components.v1 as components
+import random
+import time
+import io
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from fpdf import FPDF
+from PIL import Image, ImageDraw, ImageFont
 
-# Set page configuration to wide mode
+# --------------------------------------------------
+# Set up page configuration
+# --------------------------------------------------
 st.set_page_config(
-    page_title="AquaPure", 
-    page_icon="💧", 
+    page_title="PulseGuard — Heart Health Intelligence",
+    page_icon="❤️",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS to remove Streamlit padding, header, footer, and fix page scrolling ---
-st.markdown("""
-    <style>
-        #MainMenu {visibility: hidden;}
-        header {visibility: hidden;}
-        footer {visibility: hidden;}
-        
-        .block-container {
-            padding-top: 0rem !important;
-            padding-bottom: 0rem !important;
-            padding-left: 0rem !important;
-            padding-right: 0rem !important;
-            max-width: 100% !important;
-        }
-        
-        .stApp {
-            margin: 0 !important;
-            padding: 0 !important;
-            background-color: #030712;
-        }
+LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
 
-        iframe { display: block; border: none; width: 100%; }
-    </style>
+# --------------------------------------------------
+# Session state defaults
+# --------------------------------------------------
+_defaults = {
+    "heart_rate": 72,
+    "resting_hr": 61,
+    "hrv": 55,
+    "blood_pressure_variability": 5,
+    "heart_rate_recovery": 27,
+    "sleep_quality": 86,
+    "steps": 6840,
+    "battery": 87,
+    "dark_mode": True,
+    "autoplay": False,
+    "scenario_idx": 0,
+    "selected_watch": "⌚ Apple Watch",
+    "hydration_oz": 48,
+    "logged_symptoms": [],
+    "meds_state": {"BP Medication": True, "Omega-3": True, "Magnesium": False},
+}
+
+for _key, _val in _defaults.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _val
+
+if "connected_since" not in st.session_state:
+    fake_days_ago = random.randint(2, 45)
+    st.session_state.connected_since = (
+        datetime.now(ZoneInfo("America/New_York")) - timedelta(days=fake_days_ago)
+    ).strftime("%B %d, %Y")
+
+if "trend_data" not in st.session_state:
+    st.session_state.trend_data = {
+        "heart_rate": [random.randint(65, 85) for _ in range(6)],
+        "sleep_quality": [random.randint(70, 95) for _ in range(6)],
+        "steps": [random.randint(4000, 9000) for _ in range(6)],
+    }
+
+if "full_history" not in st.session_state:
+    _history = {}
+    for _i in range(30, 0, -1):
+        _d = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=_i)).strftime("%Y-%m-%d")
+        _history[_d] = {
+            "heart_rate": random.randint(60, 105),
+            "resting_hr": random.randint(50, 85),
+            "hrv": random.randint(25, 85),
+            "blood_pressure_variability": random.randint(1, 18),
+            "heart_rate_recovery": random.randint(10, 38),
+            "sleep_quality": random.randint(45, 98),
+            "steps": random.randint(2000, 13000),
+        }
+    st.session_state.full_history = _history
+
+if "activity_feed" not in st.session_state:
+    st.session_state.activity_feed = [
+        {"time": "10m ago", "event": "Telemetry synced from Apple Watch"},
+        {"time": "1h ago", "event": "HRV baseline updated (+4 ms)"},
+        {"time": "3h ago", "event": "Resting Heart Rate logged at 61 BPM"},
+        {"time": "5h ago", "event": "Sleep analysis processed: 86% Quality"},
+    ]
+
+TIPS = [
+    "💧 Staying hydrated helps regulate heart rate and blood pressure.",
+    "😴 7-9 hours of consistent sleep supports a healthy heart rhythm.",
+    "🚶 Even a 10-minute walk can improve circulation.",
+    "🧂 Reducing sodium intake can help manage blood pressure over time.",
+    "🧘 A few minutes of deep breathing can lower stress-related heart strain.",
+    "🚭 Avoiding tobacco significantly reduces cardiovascular risk.",
+    "🥗 A diet rich in fruits and vegetables supports long-term heart health.",
+    "📅 Regular checkups help catch early warning signs.",
+    "🏋️ Strength training a couple times a week supports cardiovascular fitness too.",
+    "☕ Moderating caffeine can help reduce heart rate spikes for some people.",
+]
+
+if "tip_index" not in st.session_state:
+    st.session_state.tip_index = datetime.now(ZoneInfo("America/New_York")).timetuple().tm_yday % len(TIPS)
+
+SCENARIOS = [
+    {
+        "heart_rate": 68, "resting_hr": 58, "hrv": 72,
+        "blood_pressure_variability": 4, "heart_rate_recovery": 30,
+        "sleep_quality": 92, "steps": 11200, "battery": 91,
+    },
+    {
+        "heart_rate": 104, "resting_hr": 79, "hrv": 28,
+        "blood_pressure_variability": 16, "heart_rate_recovery": 14,
+        "sleep_quality": 58, "steps": 3200, "battery": 46,
+    },
+    {
+        "heart_rate": 88, "resting_hr": 70, "hrv": 38,
+        "blood_pressure_variability": 9, "heart_rate_recovery": 18,
+        "sleep_quality": 41, "steps": 5100, "battery": 63,
+    },
+]
+
+WATCH_OPTIONS = {
+    "⌚ Apple Watch": "#00E5FF",
+    "⌚ Samsung Galaxy Watch": "#7C5CFF",
+    "⌚ Google Pixel Watch": "#4F8BFF",
+    "⌚ Garmin": "#FF4D6D",
+    "⌚ Fitbit": "#00E5FF",
+}
+
+# Color Constants
+GOOD, WARN, DANGER = "#00E5FF", "#FFB703", "#FF4D6D"
+
+def hex_to_rgba(hex_color, alpha=0.2):
+    hex_color = hex_color.lstrip("#")
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+def score_color(score):
+    if score >= 75:
+        return GOOD
+    elif score >= 50:
+        return WARN
+    else:
+        return DANGER
+
+# --------------------------------------------------
+# Advanced Ultra-Premium CSS & Custom Theme Architecture
+# --------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: #08111F !important;
+    background-image: 
+        radial-gradient(circle at 15% 15%, rgba(0, 229, 255, 0.05) 0%, transparent 40%),
+        radial-gradient(circle at 85% 20%, rgba(124, 92, 255, 0.06) 0%, transparent 40%),
+        radial-gradient(circle at 50% 80%, rgba(255, 43, 85, 0.04) 0%, transparent 50%),
+        linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px) !important;
+    background-size: 100% 100%, 100% 100%, 100% 100%, 30px 30px, 30px 30px !important;
+    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif !important;
+    color: #F0F4F8 !important;
+}
+
+section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
+    display: none !important;
+}
+
+.stMainBlockContainer {
+    padding-top: 1.5rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1400px !important;
+}
+
+.glass-card {
+    background: rgba(13, 23, 40, 0.65) !important;
+    backdrop-filter: blur(20px) saturate(180%) !important;
+    -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 20px !important;
+    padding: 24px !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    position: relative;
+    overflow: hidden;
+}
+
+.glass-card:hover {
+    border-color: rgba(0, 229, 255, 0.3) !important;
+    box-shadow: 0 20px 40px rgba(0, 229, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
+    transform: translateY(-3px) !important;
+}
+
+.metric-card-wrapper {
+    background: rgba(13, 23, 40, 0.75);
+    border-radius: 18px;
+    padding: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    position: relative;
+    transition: all 0.25s ease;
+}
+
+.metric-card-wrapper:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+div[data-testid="column"] button {
+    height: 46px !important;
+    max-height: 46px !important;
+    min-height: 46px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 12px !important;
+}
+
+div[data-testid="column"] button p {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    margin: 0 !important;
+}
+
+div[data-testid="stTabs"] div[data-baseweb="tab-list"] {
+    background: rgba(255, 255, 255, 0.05) !important;
+    padding: 6px !important;
+    border-radius: 999px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    gap: 4px !important;
+    width: fit-content !important;
+}
+
+div[data-testid="stTabs"] div[data-baseweb="tab-highlight"],
+div[data-testid="stTabs"] div[data-baseweb="tab-border"] {
+    display: none !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"] {
+    border-radius: 999px !important;
+    padding: 8px 22px !important;
+    color: #8A99AD !important;
+    font-weight: 700 !important;
+    font-size: 12.5px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    background: transparent !important;
+    transition: all 0.25s ease !important;
+    border: none !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+    color: #00E5FF !important;
+    background: rgba(0, 229, 255, 0.08) !important;
+}
+
+div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+    background: rgba(0, 229, 255, 0.15) !important;
+    color: #00E5FF !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 0 1px rgba(0, 229, 255, 0.3) !important;
+}
+
+.heart-struct-card {
+    background: rgba(13, 23, 40, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-left: 3px solid #00E5FF;
+    border-radius: 12px;
+    padding: 14px 16px;
+    height: 100%;
+}
+.heart-struct-title {
+    color: #00E5FF;
+    font-weight: 800;
+    font-size: 12.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.heart-struct-desc {
+    color: #8A99AD;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.metric-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #8A99AD;
+    margin-bottom: 8px;
+}
+
+.metric-value {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #FFFFFF;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+.top-navbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    background: rgba(13, 23, 40, 0.85);
+    backdrop-filter: blur(25px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+
+.navbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.navbar-title {
+    font-size: 20px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #FFFFFF 30%, #8A99AD 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
+}
+
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    background-color: #00E5FF;
+    border-radius: 50%;
+    box-shadow: 0 0 12px #00E5FF;
+    animation: pulseGlow 1.8s infinite;
+}
+
+@keyframes pulseGlow {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.7); }
+    70% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(0, 229, 255, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 229, 255, 0); }
+}
+
+.stButton > button {
+    border-radius: 14px !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    color: #D1D5DB !important;
+    font-weight: 600 !important;
+    font-size: 13.5px !important;
+    padding: 0.6rem 1.2rem !important;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    backdrop-filter: blur(10px) !important;
+}
+
+.stButton > button:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(0, 229, 255, 0.4) !important;
+    color: #00E5FF !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15) !important;
+    transform: translateY(-1px) !important;
+}
+
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #00E5FF, #4F8BFF) !important;
+    color: #040914 !important;
+    border: none !important;
+    font-weight: 700 !important;
+    box-shadow: 0 4px 20px rgba(0, 229, 255, 0.35) !important;
+}
+
+/* Custom Progress Bar CSS */
+.progress-container {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    height: 10px;
+    width: 100%;
+    overflow: hidden;
+    margin-top: 8px;
+}
+.progress-bar {
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.4s ease;
+}
+
+/* Actionable Anomaly Alert Banner */
+.alert-banner {
+    background: rgba(255, 77, 109, 0.15);
+    border: 1px solid #FF4D6D;
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 0 25px rgba(255, 77, 109, 0.2);
+}
+
+.chat-bubble-user {
+    background: linear-gradient(135deg, rgba(79, 139, 255, 0.2), rgba(124, 92, 255, 0.2));
+    border: 1px solid rgba(124, 92, 255, 0.3);
+    border-radius: 18px 18px 2px 18px;
+    padding: 14px 18px;
+    color: #F0F4F8;
+    margin-bottom: 12px;
+    max-width: 80%;
+    margin-left: auto;
+}
+
+.chat-bubble-ai {
+    background: rgba(13, 23, 40, 0.8);
+    border: 1px solid rgba(0, 229, 255, 0.2);
+    border-radius: 18px 18px 18px 2px;
+    padding: 14px 18px;
+    color: #E2E8F0;
+    margin-bottom: 12px;
+    max-width: 85%;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
+</style>
 """, unsafe_allow_html=True)
 
-# Function to read and convert local logo to Base64
-def get_image_base64(image_path):
-    if os.path.exists(image_path):
-        with open(image_path, "rb") as img_file:
-            encoded = base64.b64encode(img_file.read()).decode()
-            return f"data:image/png;base64,{encoded}"
-    return ""
+# --------------------------------------------------
+# Helper Functions
+# --------------------------------------------------
+def metric_status(kind, value):
+    if kind == "heart_rate":
+        if 60 <= value <= 100:
+            return "Optimal", GOOD, 100
+        elif 50 <= value < 60 or 100 < value <= 110:
+            return "Elevated", WARN, 60
+        else:
+            return "Anomaly", DANGER, 30
+    if kind == "resting_hr":
+        if 50 <= value <= 80:
+            return "Optimal", GOOD, 100
+        elif 40 <= value < 50 or 80 < value <= 90:
+            return "Elevated", WARN, 60
+        else:
+            return "High", DANGER, 30
+    if kind == "hrv":
+        if value >= 50:
+            return "Optimal", GOOD, min(100, value)
+        elif value >= 30:
+            return "Moderate", WARN, 60
+        else:
+            return "Low Recovery", DANGER, 30
+    if kind == "bp_variability":
+        if value <= 10:
+            return "Stable", GOOD, 100
+        elif value <= 15:
+            return "Moderate", WARN, 60
+        else:
+            return "High", DANGER, 30
+    if kind == "recovery":
+        if value >= 20:
+            return "Optimal", GOOD, min(100, value * 2)
+        elif value >= 15:
+            return "Fair", WARN, 60
+        else:
+            return "Delayed", DANGER, 30
+    if kind == "sleep":
+        if value >= 80:
+            return "Restful", GOOD, value
+        elif value >= 60:
+            return "Fair", WARN, value
+        else:
+            return "Restless", DANGER, value
+    if kind == "steps":
+        pct = min(100, value / 10000 * 100)
+        if value >= 10000:
+            return "Goal Met", GOOD, 100
+        elif value >= 7500:
+            return "Active", WARN, pct
+        else:
+            return "Below Goal", DANGER, pct
+    return "Optimal", GOOD, 100
 
-logo_base64 = get_image_base64("logo.png")
-
-# Combined HTML, CSS, Three.js, Chart.js, and Tailwind CSS code
-html_code = f"""
-<!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AquaPure — Pure Water. Shared Hope.</title>
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-  <style>
-    html {{
-      scroll-behavior: smooth;
-    }}
-
-    body {{
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      font-family: 'Plus Jakarta Sans', sans-serif;
-      background-color: #030712;
-      color: #f3f4f6;
-      overflow-x: hidden;
-    }}
-
-    /* ANIMATED CUSTOM WATER SCROLLBAR */
-    ::-webkit-scrollbar {{
-      width: 12px;
-    }}
-
-    ::-webkit-scrollbar-track {{
-      background: #030712;
-      border-left: 1px solid rgba(255, 255, 255, 0.05);
-    }}
-
-    ::-webkit-scrollbar-thumb {{
-      background: linear-gradient(180deg, #06b6d4, #38bdf8, #2563eb, #06b6d4);
-      background-size: 100% 300%;
-      border-radius: 20px;
-      border: 2px solid #030712;
-      box-shadow: 0 0 12px rgba(6, 182, 212, 0.5);
-      animation: animatedScrollbar 6s ease-in-out infinite;
-    }}
-
-    ::-webkit-scrollbar-thumb:hover {{
-      background: linear-gradient(180deg, #22d3ee, #0284c7, #38bdf8, #22d3ee);
-      background-size: 100% 300%;
-      box-shadow: 0 0 18px rgba(34, 211, 238, 0.85);
-    }}
-
-    @keyframes animatedScrollbar {{
-      0% {{ background-position: 0% 0%; }}
-      50% {{ background-position: 0% 100%; }}
-      100% {{ background-position: 0% 0%; }}
-    }}
-
-    .bg-mesh {{
-      position: relative;
-      background: #030712;
-      overflow: hidden;
-    }}
-
-    /* Animated Ambient Water Orbs */
-    .orb {{
-      position: absolute;
-      width: 650px;
-      height: 650px;
-      border-radius: 50%;
-      filter: blur(140px);
-      z-index: 0;
-      opacity: 0.16;
-      animation: OrbFloat 22s infinite ease-in-out;
-    }}
-    .orb-1 {{ background: #0ea5e9; top: -10%; left: -10%; }}
-    .orb-2 {{ background: #06b6d4; bottom: 10%; right: -5%; animation-delay: -6s; }}
-
-    @keyframes OrbFloat {{
-      0%, 100% {{ transform: translate(0, 0) scale(1); }}
-      50% {{ transform: translate(60px, 90px) scale(1.12); }}
-    }}
-
-    /* Glassmorphism Cards */
-    .glass-card {{
-      background: rgba(15, 23, 42, 0.6);
-      backdrop-filter: blur(25px);
-      -webkit-backdrop-filter: blur(25px);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-    }}
-    .glass-card:hover {{
-      border-color: rgba(56, 189, 248, 0.4);
-      transform: translateY(-5px);
-      box-shadow: 0 20px 40px -15px rgba(14, 165, 233, 0.25);
-    }}
-
-    .glass-nav {{
-      background: rgba(3, 7, 18, 0.85);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-    }}
-
-    .nav-btn.active {{
-      color: #38bdf8;
-      border-bottom: 2px solid #38bdf8;
-    }}
-
-    .canvas-glow::after {{
-      content: '';
-      position: absolute;
-      bottom: -15px;
-      left: 15%;
-      right: 15%;
-      height: 15px;
-      background: radial-gradient(ellipse at center, rgba(56, 189, 248, 0.25) 0%, transparent 70%);
-      pointer-events: none;
-    }}
-
-    #particles-canvas {{
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      z-index: 1;
-    }}
-  </style>
-</head>
-
-<body class="bg-mesh min-h-screen relative pb-12">
-  <canvas id="particles-canvas"></canvas>
-  
-  <div class="orb orb-1"></div>
-  <div class="orb orb-2"></div>
-
-  <header class="fixed top-0 left-0 right-0 z-50 glass-nav border-b border-white/10 shadow-2xl">
-    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-      
-      <a href="#" onclick="switchTab('tab-all')" class="flex items-center gap-4 group">
-        <div class="p-2 rounded-2xl bg-white/5 border border-white/10 group-hover:border-cyan-500/50 transition-all duration-300 shadow-md">
-          <img src="{logo_base64}" alt="AquaPure Logo" class="h-14 md:h-16 w-auto object-contain transition-transform duration-300 group-hover:scale-105" />
-        </div>
-        <div class="flex flex-col">
-          <span class="text-2xl md:text-3xl font-extrabold tracking-wider bg-gradient-to-r from-white via-slate-200 to-cyan-400 bg-clip-text text-transparent">
-            AQUAPURE
-          </span>
-          <span class="text-[10px] md:text-xs font-semibold tracking-widest text-cyan-400/90 uppercase mt-0.5">
-            Pure Water. Shared Hope.
-          </span>
-        </div>
-      </a>
-
-      <nav class="hidden lg:flex items-center gap-6 text-xs font-bold uppercase tracking-widest text-slate-300">
-        <button id="nav-all" onclick="switchTab('tab-all')" class="nav-btn active hover:text-cyan-400 transition-colors py-2">Overview</button>
-        <button id="nav-mission" onclick="switchTab('tab-mission')" class="nav-btn hover:text-cyan-400 transition-colors py-2">Mission</button>
-        <button id="nav-pfd" onclick="switchTab('tab-pfd')" class="nav-btn hover:text-cyan-400 transition-colors py-2">CAD 3D PFD</button>
-        <button id="nav-data" onclick="switchTab('tab-data')" class="nav-btn hover:text-cyan-400 transition-colors py-2"><i class="fa-solid fa-chart-line text-cyan-400 mr-1"></i> Data & Analytics</button>
-        <button id="nav-impact" onclick="switchTab('tab-impact')" class="nav-btn hover:text-cyan-400 transition-colors py-2">Global Impact</button>
-        <button id="nav-involved" onclick="switchTab('tab-involved')" class="nav-btn hover:text-cyan-400 transition-colors py-2">Get Involved</button>
-      </nav>
-
-      <button onclick="switchTab('tab-involved')" class="px-6 py-3 rounded-full text-xs font-bold uppercase tracking-wider bg-cyan-500 text-black hover:bg-cyan-400 transition-all duration-300 shadow-lg shadow-cyan-500/25 active:scale-95">
-        Join Us
-      </button>
-    </div>
-  </header>
-
-  <section class="relative z-10 max-w-7xl mx-auto px-6 pt-48 pb-12 text-center">
-    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 text-xs font-semibold uppercase tracking-widest mb-8">
-      <span class="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
-      Industrial CAD Architecture Integrated
-    </div>
-
-    <h1 class="text-4xl md:text-6xl lg:text-7xl font-extrabold text-white tracking-tight leading-tight max-w-5xl mx-auto mb-6">
-      Transforming Contaminated Water Into <span class="bg-gradient-to-r from-cyan-400 via-sky-300 to-blue-500 bg-clip-text text-transparent">Safe Drinkable Hope.</span>
-    </h1>
-
-    <p class="text-slate-400 text-base md:text-lg max-w-2xl mx-auto font-normal leading-relaxed mb-10">
-      Empowering off-grid communities with gravity-fed, multi-cartridge stainless & polymer filtration housings engineered for infinite continuous use.
-    </p>
-
-    <div class="flex flex-wrap items-center justify-center gap-3 bg-white/5 p-2 rounded-full border border-white/10 max-w-3xl mx-auto mb-8">
-      <button onclick="switchTab('tab-mission')" class="px-5 py-2 rounded-full text-xs font-semibold text-slate-300 hover:bg-cyan-500/20 hover:text-cyan-300 transition-all">
-        <i class="fa-solid fa-earth-americas mr-1"></i> Mission
-      </button>
-      <button onclick="switchTab('tab-pfd')" class="px-5 py-2 rounded-full text-xs font-semibold text-cyan-400 hover:bg-cyan-500/20 transition-all">
-        <i class="fa-solid fa-cube mr-1"></i> CAD 3D Assembly
-      </button>
-      <button onclick="switchTab('tab-data')" class="px-5 py-2 rounded-full text-xs font-semibold text-slate-300 hover:bg-cyan-500/20 hover:text-cyan-300 transition-all">
-        <i class="fa-solid fa-chart-pie mr-1"></i> Metrics & Data
-      </button>
-      <button onclick="switchTab('tab-impact')" class="px-5 py-2 rounded-full text-xs font-semibold text-slate-300 hover:bg-cyan-500/20 hover:text-cyan-300 transition-all">
-        <i class="fa-solid fa-globe mr-1"></i> Global Deployments
-      </button>
-    </div>
-  </section>
-
-  <main id="tab-container" class="relative z-10 max-w-7xl mx-auto px-6 pt-4 pb-32 mb-16 space-y-16">
-
-    <div id="tab-mission-content" class="tab-pane space-y-8">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div class="glass-card p-8 rounded-3xl relative overflow-hidden group">
-          <div class="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mb-6 group-hover:scale-110 transition-transform">
-            <i class="fa-solid fa-earth-americas text-xl"></i>
-          </div>
-          <h3 class="text-2xl font-bold text-white mb-3">Our Core Mission</h3>
-          <p class="text-slate-400 leading-relaxed text-sm md:text-base">
-            Over <strong class="text-white">2.2 billion people</strong> lack access to safe drinking water. Our industrial CAD-driven filtration housings operate off pure hydrostatic pressure, eliminating electric pumps and expensive chemical replacements.
-          </p>
-        </div>
-
-        <div class="glass-card p-8 rounded-3xl relative overflow-hidden group">
-          <div class="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mb-6 group-hover:scale-110 transition-transform">
-            <i class="fa-solid fa-gears text-xl"></i>
-          </div>
-          <h3 class="text-2xl font-bold text-white mb-3">Precision CAD Architecture</h3>
-          <p class="text-slate-400 leading-relaxed text-sm md:text-base">
-            Featuring top pressure relief valves, industrial bolted flange plates, side outlet sampling ports, and bottom sediment drain valves for quick field cleaning and maintenance.
-          </p>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-2">
-        <div class="glass-card p-6 rounded-2xl text-center">
-          <div class="text-3xl font-extrabold text-cyan-400 mb-1">0 kWh</div>
-          <div class="text-xs uppercase tracking-widest text-slate-400">Electricity Required</div>
-        </div>
-        <div class="glass-card p-6 rounded-2xl text-center">
-          <div class="text-3xl font-extrabold text-cyan-400 mb-1">99.999%</div>
-          <div class="text-xs uppercase tracking-widest text-slate-400">Pathogen Removal</div>
-        </div>
-        <div class="glass-card p-6 rounded-2xl text-center">
-          <div class="text-3xl font-extrabold text-cyan-400 mb-1">15+ Yrs</div>
-          <div class="text-xs uppercase tracking-widest text-slate-400">Chamber Operational Life</div>
-        </div>
-      </div>
-    </div>
-
-    <div id="tab-pfd-content" class="tab-pane space-y-8">
-      
-      <div class="glass-card p-8 rounded-3xl text-center border border-cyan-500/20 bg-gradient-to-b from-cyan-950/20 to-slate-950/50">
-        <span class="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-2 block">Industrial Engineering Design</span>
-        <h2 class="text-3xl md:text-4xl font-extrabold text-white mb-4">Multi-Cartridge CAD Filtration Housing</h2>
-        <p class="text-slate-400 max-w-3xl mx-auto text-sm md:text-base">
-          Interactive 3D model reflecting our exact mechanical CAD blueprint—complete with pressure gauge, flange bolt rings, inlet/outlet piping, internal cartridge tubes, and support tripod stand.
-        </p>
-      </div>
-
-      <div class="glass-card p-6 md:p-10 rounded-3xl border border-white/10 relative">
-        <div class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
-          <div>
-            <div class="flex items-center gap-2 text-cyan-400 font-semibold text-xs tracking-widest uppercase mb-1">
-              <i class="fa-solid fa-cube"></i> Interactive CAD Assembly
+def render_metric_card(title, value_str, color, micro_insight=""):
+    st.markdown(
+        f"""
+        <div class="metric-card-wrapper" style="border-top: 3px solid {color};">
+            <div class="metric-title">{title}</div>
+            <div class="metric-value">{value_str}</div>
+            <div style="font-size: 12px; color: #8A99AD; margin-top: 6px; line-height: 1.4;">
+                {micro_insight}
             </div>
-            <h2 class="text-2xl md:text-3xl font-bold text-white">Full Housing Mechanical Model</h2>
-          </div>
-          <p class="text-slate-400 text-xs md:text-sm max-w-sm">
-            Click and drag to rotate, zoom, and inspect the internal multi-cartridge core, top gauge, and flange connections.
-          </p>
+            <div style="position: absolute; top: 18px; right: 18px; width: 8px; height: 8px; border-radius: 50%; background: {color}; box-shadow: 0 0 10px {color};"></div>
         </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-        <div id="pfd-container" class="canvas-glow w-full h-[520px] rounded-2xl bg-gray-950/90 border border-white/5 overflow-hidden cursor-grab active:cursor-grabbing relative"></div>
+def render_chips(items):
+    html = '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">'
+    for text, color in items:
+        html += (
+            f'<span style="background:{hex_to_rgba(color, 0.12)};'
+            f'color:{color} !important;border:1px solid {hex_to_rgba(color, 0.3)};'
+            f'padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;">{text}</span>'
+        )
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
 
-        <div class="flex items-center justify-between mt-4 text-xs text-slate-500 px-2">
-          <span class="flex items-center gap-2"><i class="fa-solid fa-arrows-spin"></i> 360° Real-time Three.js CAD View</span>
-          <span>AquaPure CAD Vessel v3.2</span>
-        </div>
-      </div>
+def render_score_gauge(score):
+    bar_color = score_color(score)
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        number={'suffix': "/100", 'font': {'color': '#FFFFFF', 'size': 42, 'family': 'Plus Jakarta Sans'}},
+        gauge={
+            'axis': {'range': [0, 100], 'tickcolor': 'rgba(255,255,255,0.3)'},
+            'bar': {'color': bar_color, 'thickness': 0.25},
+            'bgcolor': "rgba(255,255,255,0.03)",
+            'borderwidth': 0,
+            'steps': [
+                {'range': [0, 50], 'color': "rgba(255, 77, 109, 0.15)"},
+                {'range': [50, 75], 'color': "rgba(255, 183, 3, 0.15)"},
+                {'range': [75, 100], 'color': "rgba(0, 229, 255, 0.15)"},
+            ],
+        }
+    ))
+    fig.update_layout(
+        height=260,
+        margin=dict(l=20, r=20, t=30, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font_color="#FFFFFF",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4">
-        <div class="glass-card p-8 rounded-3xl relative overflow-hidden group flex flex-col">
-          <div class="flex items-center justify-between mb-4">
-            <h4 class="text-xl font-bold text-white">PFD Community Master</h4>
-            <span class="text-3xl font-extrabold text-cyan-400">$34.99</span>
-          </div>
-          <p class="text-sm text-slate-400 mb-6 flex-grow">Full-scale multi-cartridge housing with pressure gauge & tripod base for village-scale distribution.</p>
-          <ul class="text-xs text-slate-300 space-y-2 border-t border-white/10 pt-4">
-            <li><i class="fa-solid fa-droplet text-cyan-400 mr-2"></i> Flow Rate: 1.5 Liters/min</li>
-            <li><i class="fa-solid fa-gauge-high text-cyan-400 mr-2"></i> Top Pressure Relief Gauge</li>
-            <li><i class="fa-solid fa-gears text-cyan-400 mr-2"></i> Bolted Flange Housing</li>
-            <li><i class="fa-solid fa-layer-group text-cyan-400 mr-2"></i> 5 Multi-Cartridge Array</li>
-          </ul>
-        </div>
-
-        <div class="glass-card p-8 rounded-3xl relative overflow-hidden group flex flex-col border-t-2 border-cyan-500">
-          <div class="flex items-center justify-between mb-4">
-            <h4 class="text-xl font-bold text-white">PFD Family Core</h4>
-            <span class="text-3xl font-extrabold text-cyan-400">$24.99</span>
-          </div>
-          <p class="text-sm text-slate-400 mb-6 flex-grow">Compact multi-tube vessel designed for high reliability in household environments.</p>
-          <ul class="text-xs text-slate-300 space-y-2 border-t border-white/10 pt-4">
-            <li><i class="fa-solid fa-droplet text-cyan-400 mr-2"></i> Flow Rate: 1.0 Liters/min</li>
-            <li><i class="fa-solid fa-shield-halved text-cyan-400 mr-2"></i> Removal Rate: 99.99%</li>
-            <li><i class="fa-solid fa-hourglass text-cyan-400 mr-2"></i> Life Expectancy: 10 Years</li>
-            <li><i class="fa-solid fa-layer-group text-cyan-400 mr-2"></i> 3 Multi-Cartridge Array</li>
-          </ul>
-        </div>
-
-        <div class="glass-card p-8 rounded-3xl relative overflow-hidden group flex flex-col">
-          <div class="flex items-center justify-between mb-4">
-            <h4 class="text-xl font-bold text-white">PFD Nomad Ultra</h4>
-            <span class="text-3xl font-extrabold text-cyan-400">$14.99</span>
-          </div>
-          <p class="text-sm text-slate-400 mb-6 flex-grow">Lightweight portable unit for rapid emergency response and personal field use.</p>
-          <ul class="text-xs text-slate-300 space-y-2 border-t border-white/10 pt-4">
-            <li><i class="fa-solid fa-droplet text-cyan-400 mr-2"></i> Flow Rate: 0.6 Liters/min</li>
-            <li><i class="fa-solid fa-shield-halved text-cyan-400 mr-2"></i> Removal Rate: 99.9%</li>
-            <li><i class="fa-solid fa-suitcase text-cyan-400 mr-2"></i> Rapid Relief Deployment</li>
-            <li><i class="fa-solid fa-layer-group text-cyan-400 mr-2"></i> Single Core Cartridge</li>
-          </ul>
-        </div>
-      </div>
+def render_ecg_animation(hr):
+    html_code = f"""
+    <div style="background: rgba(8, 17, 31, 0.9); border-radius: 16px; padding: 12px; border: 1px solid rgba(0, 229, 255, 0.2); box-shadow: inset 0 0 20px rgba(0,229,255,0.05);">
+    <canvas id="ecgCanvas" width="900" height="130" style="width:100%; display:block;"></canvas>
     </div>
+    <script>
+    const canvas = document.getElementById("ecgCanvas");
+    const ctx = canvas.getContext("2d");
+    let offset = 0;
+    const hr = {hr};
+    const speedFactor = Math.max(0.4, hr / 70);
 
-    <div id="tab-data-content" class="tab-pane space-y-8">
-      <div class="glass-card p-8 rounded-3xl text-center border border-cyan-500/20 bg-gradient-to-b from-cyan-950/20 to-slate-950/50">
-        <span class="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-2 block"><i class="fa-solid fa-chart-line mr-1"></i> Empirical Data & Field Performance</span>
-        <h2 class="text-3xl md:text-4xl font-extrabold text-white mb-4">Quantitative System Metrics</h2>
-        <p class="text-slate-400 max-w-3xl mx-auto text-sm md:text-base">
-          Power demand comparisons, volumetric flow rates, cost allocations per capita, and target regional population numbers.
-        </p>
-      </div>
-
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div class="glass-card p-5 rounded-2xl border-l-4 border-l-cyan-400">
-          <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Energy Demand</div>
-          <div class="text-2xl font-extrabold text-cyan-300">0 kWh</div>
-          <div class="text-[11px] text-slate-500 mt-1">Hydrostatic Gravity Driven</div>
-        </div>
-
-        <div class="glass-card p-5 rounded-2xl border-l-4 border-l-cyan-400">
-          <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Peak Flow Output</div>
-          <div class="text-2xl font-extrabold text-cyan-300">1.5 L/min</div>
-          <div class="text-[11px] text-slate-500 mt-1">90 Liters / Hour</div>
-        </div>
-
-        <div class="glass-card p-5 rounded-2xl border-l-4 border-l-cyan-400">
-          <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Starting Price</div>
-          <div class="text-2xl font-extrabold text-cyan-300">$14.99</div>
-          <div class="text-[11px] text-slate-500 mt-1">Subsidized NGO Direct</div>
-        </div>
-
-        <div class="glass-card p-5 rounded-2xl border-l-4 border-l-cyan-400">
-          <div class="text-xs text-slate-400 uppercase tracking-wider mb-1">Population Reach</div>
-          <div class="text-2xl font-extrabold text-cyan-300">2.2 Billion</div>
-          <div class="text-[11px] text-slate-500 mt-1">Target Off-Grid Demographic</div>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div class="glass-card p-6 md:p-8 rounded-3xl">
-          <h3 class="text-lg font-bold text-white mb-2">Power Consumption vs Alternatives</h3>
-          <p class="text-xs text-slate-400 mb-6">kWh required per 1,000 Liters of purified water</p>
-          <div class="h-[280px] w-full">
-            <canvas id="chartElectricity"></canvas>
-          </div>
-        </div>
-
-        <div class="glass-card p-6 md:p-8 rounded-3xl">
-          <h3 class="text-lg font-bold text-white mb-2">Model Pricing vs Flow Rate</h3>
-          <p class="text-xs text-slate-400 mb-6">Flow capacity (L/min) across production models</p>
-          <div class="h-[280px] w-full">
-            <canvas id="chartPriceFlow"></canvas>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div id="tab-impact-content" class="tab-pane space-y-8">
-      <div class="glass-card p-6 md:p-10 rounded-3xl border border-white/10 relative">
-        <div class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
-          <div>
-            <div class="flex items-center gap-2 text-cyan-400 font-semibold text-xs tracking-widest uppercase mb-1">
-              <i class="fa-solid fa-globe"></i> Active Deployment Zones & Global Supply Network
-            </div>
-            <h2 class="text-2xl md:text-3xl font-bold text-white">Target Regions & Water Flow Lines</h2>
-          </div>
-          <p class="text-slate-400 text-xs md:text-sm max-w-sm">
-            Click on any pulsing glowing marker to view site status, local daily flow rates, and deployment metrics.
-          </p>
-        </div>
-
-        <div id="globe-container" class="canvas-glow w-full h-[560px] rounded-2xl bg-gray-950/90 border border-white/5 overflow-hidden cursor-grab active:cursor-grabbing relative">
-          
-          <div id="globe-popup" class="hidden absolute top-6 right-6 z-30 max-w-sm w-full bg-slate-900/90 backdrop-blur-2xl border border-cyan-500/40 p-6 rounded-2xl shadow-2xl transition-all duration-300">
-            <div class="flex items-center justify-between mb-3 border-b border-white/10 pb-3">
-              <div class="flex items-center gap-2">
-                <span id="popup-type" class="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] font-bold uppercase tracking-wider border border-cyan-500/30">Hub</span>
-                <h3 id="popup-title" class="text-lg font-bold text-white">Region Name</h3>
-              </div>
-              <button onclick="closeGlobePopup()" class="text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <p id="popup-desc" class="text-xs text-slate-300 mb-4 leading-relaxed">Location summary and details go here.</p>
-            <div class="grid grid-cols-2 gap-3 text-xs mb-4">
-              <div class="bg-white/5 p-2.5 rounded-xl border border-white/5">
-                <span class="text-[10px] uppercase text-slate-400 block mb-0.5">Active Units</span>
-                <span id="popup-units" class="text-base font-extrabold text-cyan-400">0</span>
-              </div>
-              <div class="bg-white/5 p-2.5 rounded-xl border border-white/5">
-                <span class="text-[10px] uppercase text-slate-400 block mb-0.5">Daily Capacity</span>
-                <span id="popup-capacity" class="text-base font-extrabold text-cyan-400">0 L</span>
-              </div>
-            </div>
-            <div class="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-white/10">
-              <span>Status: <strong id="popup-status" class="text-emerald-400">Operational</strong></span>
-              <span id="popup-coordinates" class="font-mono text-slate-500">0° N, 0° E</span>
-            </div>
-          </div>
-
-        </div>
-      </div>
-    </div>
-
-    <div id="tab-involved-content" class="tab-pane space-y-8 pb-12">
-      <div class="glass-card p-8 md:p-12 rounded-3xl text-center border border-cyan-500/20 bg-gradient-to-b from-cyan-950/20 to-slate-950/50">
-        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-cyan-500/10 text-cyan-400 text-2xl mb-6 border border-cyan-500/30">
-          <i class="fa-solid fa-hand-holding-droplet"></i>
-        </div>
-        <h2 class="text-3xl md:text-4xl font-extrabold text-white mb-4">Partner With AquaPure</h2>
-        <p class="text-slate-400 max-w-2xl mx-auto mb-8 text-sm md:text-base">
-          Join forces with our engineering team, humanitarian organizations, and local field managers to deploy CAD-tested water units globally.
-        </p>
-        <div class="flex flex-wrap items-center justify-center gap-4">
-          <a href="mailto:contact@aquapure.org" class="px-8 py-4 rounded-full bg-cyan-500 text-black font-bold text-sm hover:bg-cyan-400 transition-all shadow-lg shadow-cyan-500/25 active:scale-95">
-            <i class="fa-solid fa-envelope mr-2"></i> Contact Engineering Team
-          </a>
-        </div>
-      </div>
-    </div>
-
-  </main>
-
-  <footer class="border-t border-white/5 py-12 text-center text-xs text-slate-500 relative z-10">
-    <div class="flex items-center justify-center gap-4 mb-4">
-      <img src="{logo_base64}" alt="AquaPure" class="h-12 w-auto opacity-90" />
-      <span class="font-bold text-slate-200 text-base tracking-widest">AQUAPURE</span>
-    </div>
-    <p>© 2026 AquaPure Engineering Team. Pure Water. Shared Hope.</p>
-  </footer>
-
-  <script>
-    // Dynamic Height Reporting for Streamlit Iframe
-    function sendHeightToParent() {{
-      const height = document.documentElement.scrollHeight;
-      window.parent.postMessage({{ frameHeight: height }}, '*');
-    }}
-
-    const resizeObserver = new ResizeObserver(() => sendHeightToParent());
-    resizeObserver.observe(document.body);
-
-    // --- BACKGROUND PARTICLE CANVAS ENGINE ---
-    const canvas = document.getElementById('particles-canvas');
-    const ctx = canvas.getContext('2d');
-    let particles = [];
-
-    function initParticles() {{
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      particles = [];
-      for(let i = 0; i < 45; i++) {{
-        particles.push({{
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          size: Math.random() * 2 + 1,
-          speed: Math.random() * 0.4 + 0.15,
-          opacity: Math.random() * 0.35 + 0.05
-        }});
-      }}
-    }}
-
-    function drawParticles() {{
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      particles.forEach(p => {{
+    function drawECG() {{
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "#00E5FF";
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = "#00E5FF";
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(56, 189, 248, ${{p.opacity}})`;
-        ctx.fill();
-        p.y -= p.speed;
-        if(p.y < -10) p.y = canvas.height + 10;
-      }});
-      requestAnimationFrame(drawParticles);
-    }}
+        const midY = canvas.height / 2;
 
-    initParticles();
-    drawParticles();
+        for (let x = 0; x < canvas.width; x++) {{
+            const t = (x + offset) * 0.05 * speedFactor;
+            let y = midY;
+            const beatPos = t % 20;
+            if (beatPos > 9 && beatPos < 9.5) y -= 12;
+            else if (beatPos > 9.5 && beatPos < 10) y += 45;
+            else if (beatPos > 10 && beatPos < 10.5) y -= 65;
+            else if (beatPos > 10.5 && beatPos < 11) y += 18;
+            else y += Math.sin(t) * 2;
 
-    // --- TAB SWITCHING SYSTEM ---
-    function switchTab(tabId) {{
-      const tabs = ['tab-mission', 'tab-pfd', 'tab-data', 'tab-impact', 'tab-involved'];
-      
-      if (tabId === 'tab-all') {{
-        tabs.forEach(id => {{
-          document.getElementById(id + '-content').style.display = 'block';
-        }});
-      }} else {{
-        tabs.forEach(id => {{
-          const el = document.getElementById(id + '-content');
-          if (id + '-content' === tabId + '-content') {{
-            el.style.display = 'block';
-          }} else {{
-            el.style.display = 'none';
-          }}
-        }});
-      }}
-
-      const navBtns = {{
-        'tab-all': 'nav-all',
-        'tab-mission': 'nav-mission',
-        'tab-pfd': 'nav-pfd',
-        'tab-data': 'nav-data',
-        'tab-impact': 'nav-impact',
-        'tab-involved': 'nav-involved'
-      }};
-
-      Object.keys(navBtns).forEach(key => {{
-        const btn = document.getElementById(navBtns[key]);
-        if (btn) {{
-          if (key === tabId) {{
-            btn.classList.add('active');
-          }} else {{
-            btn.classList.remove('active');
-          }}
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }}
-      }});
-
-      setTimeout(() => {{
-        window.dispatchEvent(new Event('resize'));
-        sendHeightToParent();
-      }}, 120);
+        ctx.stroke();
+        offset += 2.5 * speedFactor;
+        requestAnimationFrame(drawECG);
     }}
-
-    switchTab('tab-all');
-
-    // --- CHART.JS METRICS ---
-    Chart.defaults.color = '#94a3b8';
-    Chart.defaults.font.family = "'Plus Jakarta Sans', sans-serif";
-
-    new Chart(document.getElementById('chartElectricity').getContext('2d'), {{
-      type: 'bar',
-      data: {{
-        labels: ['AquaPure CAD', 'UV Sanitizer', 'Reverse Osmosis', 'Electric Pump'],
-        datasets: [{{
-          label: 'Electricity (kWh / 1000L)',
-          data: [0, 0.45, 2.2, 1.1],
-          backgroundColor: ['#06b6d4', '#334155', '#334155', '#334155'],
-          borderRadius: 8
-        }}]
-      }},
-      options: {{
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {{ legend: {{ display: false }} }},
-        scales: {{ y: {{ grid: {{ color: 'rgba(255, 255, 255, 0.05)' }} }}, x: {{ grid: {{ display: false }} }} }}
-      }}
-    }});
-
-    new Chart(document.getElementById('chartPriceFlow').getContext('2d'), {{
-      type: 'line',
-      data: {{
-        labels: ['Nomad Ultra ($14.99)', 'Family Core ($24.99)', 'Community Master ($34.99)'],
-        datasets: [{{
-          label: 'Flow Rate (L/min)',
-          data: [0.6, 1.0, 1.5],
-          borderColor: '#38bdf8',
-          backgroundColor: 'rgba(56, 189, 248, 0.15)',
-          fill: true,
-          tension: 0.4,
-          pointRadius: 6,
-          pointBackgroundColor: '#06b6d4'
-        }}]
-      }},
-      options: {{
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {{ legend: {{ display: false }} }},
-        scales: {{ y: {{ grid: {{ color: 'rgba(255, 255, 255, 0.05)' }} }}, x: {{ grid: {{ display: false }} }} }}
-      }}
-    }});
-
-    // --- THREE.JS INDUSTRIAL CAD HOUSING MODEL ---
-    const pfdContainer = document.getElementById('pfd-container');
-    const pfdScene = new THREE.Scene();
-    const pfdCamera = new THREE.PerspectiveCamera(45, pfdContainer.clientWidth / pfdContainer.clientHeight, 0.1, 1000);
-    pfdCamera.position.set(0, 0.5, 7.5);
-
-    const pfdRenderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
-    pfdRenderer.setSize(pfdContainer.clientWidth, pfdContainer.clientHeight);
-    pfdRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    pfdContainer.appendChild(pfdRenderer.domElement);
-
-    const pfdControls = new THREE.OrbitControls(pfdCamera, pfdRenderer.domElement);
-    pfdControls.enableDamping = true;
-    pfdControls.dampingFactor = 0.05;
-    pfdControls.autoRotate = true;
-    pfdControls.autoRotateSpeed = 1.0;
-
-    // Lighting Setup
-    pfdScene.add(new THREE.AmbientLight(0xffffff, 0.9));
-    const mainDirLight = new THREE.DirectionalLight(0x38bdf8, 2.0);
-    mainDirLight.position.set(6, 10, 8);
-    pfdScene.add(mainDirLight);
-
-    const backDirLight = new THREE.DirectionalLight(0x0284c7, 1.2);
-    backDirLight.position.set(-6, -5, -6);
-    pfdScene.add(backDirLight);
-
-    const cadAssembly = new THREE.Group();
-
-    // 1. Transparent Outer Cylinder Vessel
-    const vesselGeo = new THREE.CylinderGeometry(1.35, 1.35, 3.0, 32);
-    const vesselMat = new THREE.MeshPhysicalMaterial({{
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.22,
-      roughness: 0.08,
-      transmission: 0.88,
-      thickness: 0.6,
-      clearcoat: 1.0
-    }});
-    const outerVessel = new THREE.Mesh(vesselGeo, vesselMat);
-    cadAssembly.add(outerVessel);
-
-    // 2. Bolted Top Flange Head Plate & Bottom Flange Head
-    const flangeRingGeo = new THREE.CylinderGeometry(1.55, 1.55, 0.18, 32);
-    const steelMat = new THREE.MeshStandardMaterial({{ color: 0x1e293b, roughness: 0.25, metalness: 0.85 }});
-
-    const topFlange = new THREE.Mesh(flangeRingGeo, steelMat);
-    topFlange.position.y = 1.55;
-    cadAssembly.add(topFlange);
-
-    const bottomFlange = new THREE.Mesh(flangeRingGeo, steelMat);
-    bottomFlange.position.y = -1.55;
-    cadAssembly.add(bottomFlange);
-
-    // Flange Bolts Array around perimeter
-    const numBolts = 12;
-    const boltGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.28, 12);
-    const boltMat = new THREE.MeshStandardMaterial({{ color: 0x94a3b8, metalness: 0.9, roughness: 0.2 }});
-
-    for(let i = 0; i < numBolts; i++) {{
-      const angle = (i / numBolts) * Math.PI * 2;
-      const bx = Math.cos(angle) * 1.45;
-      const bz = Math.sin(angle) * 1.45;
-
-      const topBolt = new THREE.Mesh(boltGeo, boltMat);
-      topBolt.position.set(bx, 1.55, bz);
-      cadAssembly.add(topBolt);
-
-      const bottomBolt = new THREE.Mesh(boltGeo, boltMat);
-      bottomBolt.position.set(bx, -1.55, bz);
-      cadAssembly.add(bottomBolt);
-    }}
-
-    // 3. Top Dome Cap & Bottom Conical Dish
-    const domeGeo = new THREE.SphereGeometry(1.35, 32, 16, 0, Math.PI * 2, 0, Math.PI / 3);
-    const topDome = new THREE.Mesh(domeGeo, steelMat);
-    topDome.position.y = 1.64;
-    cadAssembly.add(topDome);
-
-    const coneGeo = new THREE.ConeGeometry(1.35, 0.6, 32);
-    const bottomCone = new THREE.Mesh(coneGeo, steelMat);
-    bottomCone.position.y = -1.85;
-    bottomCone.rotation.x = Math.PI;
-    cadAssembly.add(bottomCone);
-
-    // 4. Pressure Relief Gauge on Top
-    const gaugeStemGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.4, 16);
-    const gaugeStem = new THREE.Mesh(gaugeStemGeo, steelMat);
-    gaugeStem.position.y = 2.4;
-    cadAssembly.add(gaugeStem);
-
-    const gaugeBodyGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.12, 24);
-    const gaugeFaceMat = new THREE.MeshStandardMaterial({{ color: 0xf8fafc, roughness: 0.1 }});
-    const gaugeBody = new THREE.Mesh(gaugeBodyGeo, gaugeFaceMat);
-    gaugeBody.position.y = 2.65;
-    gaugeBody.rotation.x = Math.PI / 2;
-    cadAssembly.add(gaugeBody);
-
-    const gaugeBezelGeo = new THREE.TorusGeometry(0.3, 0.03, 16, 32);
-    const gaugeBezel = new THREE.Mesh(gaugeBezelGeo, steelMat);
-    gaugeBezel.position.set(0, 2.65, 0.06);
-    cadAssembly.add(gaugeBezel);
-
-    // 5. Inlet / Outlet Pipe Ports & Bottom Drain Valve
-    const pipeGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.6, 20);
-    const cyanPipeMat = new THREE.MeshStandardMaterial({{ color: 0x0284c7, metalness: 0.6, roughness: 0.3 }});
-
-    const topInletPipe = new THREE.Mesh(pipeGeo, cyanPipeMat);
-    topInletPipe.position.set(0, 2.1, 0);
-    cadAssembly.add(topInletPipe);
-
-    const sideOutletPipe = new THREE.Mesh(pipeGeo, cyanPipeMat);
-    sideOutletPipe.position.set(1.5, -0.8, 0);
-    sideOutletPipe.rotation.z = Math.PI / 2;
-    cadAssembly.add(sideOutletPipe);
-
-    const drainValveGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.5, 16);
-    const drainValve = new THREE.Mesh(drainValveGeo, steelMat);
-    drainValve.position.set(0, -2.35, 0);
-    cadAssembly.add(drainValve);
-
-    // 6. Internal Multi-Cartridge Array (5 Filter Tubes)
-    const numTubes = 5;
-    const tubeRadius = 0.26;
-    const tubeHeight = 2.6;
-    const arrayRadius = 0.65;
-
-    const tubeGeo = new THREE.CylinderGeometry(tubeRadius, tubeRadius, tubeHeight, 24);
-    const tubeMat = new THREE.MeshStandardMaterial({{ color: 0xf1f5f9, roughness: 0.5, metalness: 0.1 }});
-
-    for(let i = 0; i < numTubes; i++) {{
-      const angle = (i / numTubes) * Math.PI * 2;
-      const tx = Math.cos(angle) * arrayRadius;
-      const tz = Math.sin(angle) * arrayRadius;
-
-      const filterTube = new THREE.Mesh(tubeGeo, tubeMat);
-      filterTube.position.set(tx, 0, tz);
-
-      // Top & Bottom Sealing Fittings
-      const sealGeo = new THREE.CylinderGeometry(tubeRadius + 0.04, tubeRadius + 0.04, 0.14, 16);
-      const sealMat = new THREE.MeshStandardMaterial({{ color: 0x06b6d4 }});
-
-      const topSeal = new THREE.Mesh(sealGeo, sealMat);
-      topSeal.position.set(tx, tubeHeight / 2, tz);
-
-      const bottomSeal = new THREE.Mesh(sealGeo, sealMat);
-      bottomSeal.position.set(tx, -tubeHeight / 2, tz);
-
-      cadAssembly.add(filterTube);
-      cadAssembly.add(topSeal);
-      cadAssembly.add(bottomSeal);
-    }}
-
-    // 7. Structural Tripod Support Legs Frame
-    const legGeo = new THREE.CylinderGeometry(0.06, 0.06, 2.2, 16);
-    const numLegs = 3;
-
-    for(let i = 0; i < numLegs; i++) {{
-      const angle = (i / numLegs) * Math.PI * 2;
-      const lx = Math.cos(angle) * 1.5;
-      const lz = Math.sin(angle) * 1.5;
-
-      const leg = new THREE.Mesh(legGeo, steelMat);
-      leg.position.set(lx, -2.4, lz);
-      leg.rotation.z = Math.cos(angle) * 0.22;
-      leg.rotation.x = -Math.sin(angle) * 0.22;
-      cadAssembly.add(leg);
-    }}
-
-    cadAssembly.position.y = 0.2;
-    pfdScene.add(cadAssembly);
-
-    // --- ENHANCED THREE.JS GLOBE ENGINE WITH SLOWER ROTATION & SLOWER PULSES ---
-    const globeContainer = document.getElementById('globe-container');
-    const globeScene = new THREE.Scene();
-    const globeCamera = new THREE.PerspectiveCamera(45, globeContainer.clientWidth / globeContainer.clientHeight, 0.1, 1000);
-    globeCamera.position.set(0, 0, 7.2);
-
-    const globeRenderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
-    globeRenderer.setSize(globeContainer.clientWidth, globeContainer.clientHeight);
-    globeRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    globeContainer.appendChild(globeRenderer.domElement);
-
-    const globeControls = new THREE.OrbitControls(globeCamera, globeRenderer.domElement);
-    globeControls.enableDamping = true;
-    globeControls.dampingFactor = 0.05;
-    globeControls.autoRotate = true;
-    globeControls.autoRotateSpeed = 0.3; // SLOWER ROTATION SPEED
-
-    globeScene.add(new THREE.AmbientLight(0xffffff, 0.8));
-    const globeDir = new THREE.DirectionalLight(0x38bdf8, 1.8);
-    globeDir.position.set(5, 3, 5);
-    globeScene.add(globeDir);
-
-    const earthGroup = new THREE.Group();
-    const globeRadius = 2.2;
-    const textureLoader = new THREE.TextureLoader();
-    const earthTexture = textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg');
-
-    const sphereGeo = new THREE.SphereGeometry(globeRadius, 64, 64);
-    const sphereMat = new THREE.MeshPhongMaterial({{ map: earthTexture, shininess: 15, color: 0x0284c7, emissive: 0x021d38 }});
-    const earthMesh = new THREE.Mesh(sphereGeo, sphereMat);
-    earthGroup.add(earthMesh);
-
-    // Locations Data Registry
-    const locationData = [
-      {{ id: 'hq', name: 'Engineering HQ (USA)', lat: 37.7749, lon: -122.4194, type: 'Manufacturing Hub', units: 1200, capacity: '1,800,000', desc: 'Primary R&D facility and automated CAD filtration housing manufacturing plant.', status: 'Active HQ' }},
-      {{ id: 'sa', name: 'Amazon Basin (Brazil)', lat: -14.235, lon: -51.925, type: 'Field Zone', units: 340, capacity: '306,000', desc: 'Off-grid riverfront deployments operating without electricity in remote villages.', status: 'Operational' }},
-      {{ id: 'wa', name: 'Lagos & Rural Grid (Nigeria)', lat: 9.082, lon: 8.675, type: 'Regional Hub', units: 620, capacity: '558,000', desc: 'Multi-cartridge Community Master filtration vessels supplying 42 local communities.', status: 'Operational' }},
-      {{ id: 'ea', name: 'Rift Valley (Kenya)', lat: -1.292, lon: 36.821, type: 'Field Zone', units: 480, capacity: '432,000', desc: 'High-turbidity sediment filtration installations connected to surface water sources.', status: 'Operational' }},
-      {{ id: 'sa_asia', name: 'Ganges Basin (India)', lat: 20.593, lon: 78.962, type: 'Regional Hub', units: 890, capacity: '801,000', desc: 'High-volume community clean water distribution network.', status: 'Operational' }},
-      {{ id: 'se_asia', name: 'Mekong Delta (Vietnam)', lat: 10.823, lon: 106.629, type: 'Field Zone', units: 290, capacity: '261,000', desc: 'Heavy silt and pathogen removal units for riverland agricultural communities.', status: 'Operational' }}
-    ];
-
-    const pulsingRings = [];
-    const interactiveMarkerMeshes = [];
-
-    // Helper: Convert Lat/Lon to 3D Vector
-    function latLonToVector3(lat, lon, radius) {{
-      const phi = (90 - lat) * (Math.PI / 180);
-      const theta = (lon + 180) * (Math.PI / 180);
-      const x = -(radius) * Math.sin(phi) * Math.cos(theta);
-      const z = (radius) * Math.sin(phi) * Math.sin(theta);
-      const y = (radius) * Math.cos(phi);
-      return new THREE.Vector3(x, y, z);
-    }}
-
-    // Add Glowing & Pulsing Location Markers
-    locationData.forEach(loc => {{
-      const pos = latLonToVector3(loc.lat, loc.lon, globeRadius + 0.02);
-
-      // Core Marker Sphere
-      const markerGeo = new THREE.SphereGeometry(0.065, 16, 16);
-      const markerMat = new THREE.MeshBasicMaterial({{ color: loc.type === 'Manufacturing Hub' ? 0x22d3ee : 0x38bdf8 }});
-      const markerMesh = new THREE.Mesh(markerGeo, markerMat);
-      markerMesh.position.copy(pos);
-      markerMesh.userData = loc;
-      earthGroup.add(markerMesh);
-      interactiveMarkerMeshes.push(markerMesh);
-
-      // Glowing Atmosphere Shell
-      const glowGeo = new THREE.SphereGeometry(0.1, 16, 16);
-      const glowMat = new THREE.MeshBasicMaterial({{ color: 0x38bdf8, transparent: true, opacity: 0.35 }});
-      const glowMesh = new THREE.Mesh(glowGeo, glowMat);
-      glowMesh.position.copy(pos);
-      earthGroup.add(glowMesh);
-
-      // Pulsing Ring
-      const ringGeo = new THREE.RingGeometry(0.08, 0.12, 32);
-      const ringMat = new THREE.MeshBasicMaterial({{ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }});
-      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-      ringMesh.position.copy(pos.clone().multiplyScalar(1.01));
-      ringMesh.lookAt(pos.clone().multiplyScalar(2));
-      earthGroup.add(ringMesh);
-
-      pulsingRings.push({{ mesh: ringMesh, scale: 1, opacity: 0.8 }});
-    }});
-
-    // Draw Animated Supply Lines / Water Network Arcs
-    const arcConnections = [
-      ['hq', 'sa'], ['hq', 'wa'], ['hq', 'sa_asia'],
-      ['wa', 'ea'], ['sa_asia', 'se_asia']
-    ];
-
-    const animatedArcCurves = [];
-
-    arcConnections.forEach(pair => {{
-      const loc1 = locationData.find(l => l.id === pair[0]);
-      const loc2 = locationData.find(l => l.id === pair[1]);
-
-      if (loc1 && loc2) {{
-        const v1 = latLonToVector3(loc1.lat, loc1.lon, globeRadius + 0.02);
-        const v2 = latLonToVector3(loc2.lat, loc2.lon, globeRadius + 0.02);
-
-        // Arc mid point elevated off the earth surface
-        const distance = v1.distanceTo(v2);
-        const mid = v1.clone().add(v2).multiplyScalar(0.5);
-        mid.normalize().multiplyScalar(globeRadius + 0.02 + distance * 0.28);
-
-        const curve = new THREE.QuadraticBezierCurve3(v1, mid, v2);
-        const points = curve.getPoints(50);
-        const curveGeo = new THREE.BufferGeometry().setFromPoints(points);
-
-        // Static Arc Tube Line
-        const lineMat = new THREE.LineBasicMaterial({{ color: 0x0284c7, transparent: true, opacity: 0.45 }});
-        const arcLine = new THREE.Line(curveGeo, lineMat);
-        earthGroup.add(arcLine);
-
-        // Flow Pulse Particle traveling along the curve
-        const flowParticleGeo = new THREE.SphereGeometry(0.03, 12, 12);
-        const flowParticleMat = new THREE.MeshBasicMaterial({{ color: 0x38bdf8 }});
-        const flowParticle = new THREE.Mesh(flowParticleGeo, flowParticleMat);
-        earthGroup.add(flowParticle);
-
-        animatedArcCurves.push({{ curve, particle: flowParticle, progress: Math.random() }});
-      }}
-    }});
-
-    globeScene.add(earthGroup);
-
-    // --- RAYCASTING CLICK INTERACTION FOR MARKERS ---
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
-
-    globeContainer.addEventListener('click', (e) => {{
-      const rect = globeContainer.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / globeContainer.clientWidth) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / globeContainer.clientHeight) * 2 + 1;
-
-      raycaster.setFromCamera(mouse, globeCamera);
-      const intersects = raycaster.intersectObjects(interactiveMarkerMeshes);
-
-      if (intersects.length > 0) {{
-        const data = intersects[0].object.userData;
-        showGlobePopup(data);
-        globeControls.autoRotate = false;
-      }}
-    }});
-
-    function showGlobePopup(data) {{
-      document.getElementById('popup-title').innerText = data.name;
-      document.getElementById('popup-type').innerText = data.type;
-      document.getElementById('popup-desc').innerText = data.desc;
-      document.getElementById('popup-units').innerText = data.units.toLocaleString();
-      document.getElementById('popup-capacity').innerText = data.capacity + ' L';
-      document.getElementById('popup-status').innerText = data.status;
-      document.getElementById('popup-coordinates').innerText = `${{data.lat.toFixed(1)}}°, ${{data.lon.toFixed(1)}}°`;
-      document.getElementById('globe-popup').classList.remove('hidden');
-    }}
-
-    function closeGlobePopup() {{
-      document.getElementById('globe-popup').classList.add('hidden');
-      globeControls.autoRotate = true;
-    }}
-
-    // Resize Handler
-    window.addEventListener('resize', () => {{
-      initParticles();
-
-      if (pfdContainer.clientWidth > 0) {{
-        pfdCamera.aspect = pfdContainer.clientWidth / pfdContainer.clientHeight;
-        pfdCamera.updateProjectionMatrix();
-        pfdRenderer.setSize(pfdContainer.clientWidth, pfdContainer.clientHeight);
-      }}
-
-      if (globeContainer.clientWidth > 0) {{
-        globeCamera.aspect = globeContainer.clientWidth / globeContainer.clientHeight;
-        globeCamera.updateProjectionMatrix();
-        globeRenderer.setSize(globeContainer.clientWidth, globeContainer.clientHeight);
-      }}
-    }});
-
-    // Animation Loop
-    function animate() {{
-      requestAnimationFrame(animate);
-
-      pfdControls.update();
-      globeControls.update();
-
-      // SLOWER Pulsing Marker Rings Animation
-      pulsingRings.forEach(ring => {{
-        ring.scale += 0.006;   // Reduced expansion speed
-        ring.opacity -= 0.005; // Reduced opacity decay speed
-        if (ring.scale > 2.2) {{
-          ring.scale = 1;
-          ring.opacity = 0.8;
-        }}
-        ring.mesh.scale.set(ring.scale, ring.scale, ring.scale);
-        ring.mesh.material.opacity = Math.max(0, ring.opacity);
-      }});
-
-      // Animate Arc Water Flow Particles
-      animatedArcCurves.forEach(arc => {{
-        arc.progress += 0.004; // Smooth, relaxed flow Along Arcs
-        if (arc.progress > 1) arc.progress = 0;
-        const p = arc.curve.getPoint(arc.progress);
-        arc.particle.position.copy(p);
-      }});
-
-      pfdRenderer.render(pfdScene, pfdCamera);
-      globeRenderer.render(globeScene, globeCamera);
-    }}
-    animate();
-  </script>
-</body>
-</html>
-"""
-
-# Render full screen HTML inside Streamlit
-st.components.v1.html(html_code, height=5200, scrolling=True)
+    drawECG();
+    </script>
+    """
+    components.html(html_code, height=155)
+
+HEART_STRUCTURES = [
+    {"title": "Aorta", "desc": "The main artery routing freshly oxygenated blood from the heart out to the rest of the body."},
+    {"title": "Left Ventricle", "desc": "The heart's primary pumping chamber — thick, muscular, and responsible for sending blood to the entire body."},
+    {"title": "Right Atrium", "desc": "Receives deoxygenated blood returning from the body's veins before it's sent to the lungs."},
+    {"title": "Coronary Artery", "desc": "Supplies oxygenated blood directly to the heart muscle itself, keeping the heart alive."},
+    {"title": "Right Ventricle", "desc": "Pumps deoxygenated blood onward to the lungs via the pulmonary artery to be re-oxygenated."},
+]
+
+def render_heart_structure_reference():
+    cols = st.columns(len(HEART_STRUCTURES))
+    for _col, _struct in zip(cols, HEART_STRUCTURES):
+        with _col:
+            st.markdown(
+                f"""
+                <div class="heart-struct-card">
+                    <div class="heart-struct-title">📍 {_struct['title']}</div>
+                    <div class="heart-struct-desc">{_struct['desc']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+def render_3d_heart(hr=72):
+    MODEL_URL = "https://cdn.jsdelivr.net/gh/FreddieSawiras/NJHDP-PulseGaurd@main/assets/scene.gltf"
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            html, body {{ margin: 0; height: 100%; overflow: hidden; background: transparent; font-family: 'Plus Jakarta Sans', sans-serif; }}
+            #container {{ width: 100%; height: 100%; min-height: 500px; position: relative; }}
+            #infoBox {{
+                position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+                background: rgba(8, 17, 31, 0.85); backdrop-filter: blur(12px);
+                border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 14px;
+                padding: 10px 20px; color: #FFFFFF; font-size: 12.5px; font-weight: 600;
+                text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+                pointer-events: none; transition: all 0.2s ease;
+                z-index: 10; max-width: 85%;
+            }}
+            .part-tag {{ color: #00E5FF; font-weight: 700; }}
+            #loading {{
+                position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                color: #00E5FF; font-size: 13px; font-weight: 700; letter-spacing: 0.05em;
+                z-index: 5; text-align: center; width: 80%;
+            }}
+            #hud {{
+                position: absolute; top: 14px; left: 16px;
+                color: rgba(255,255,255,0.6); font-size: 11px; font-weight: 700;
+                letter-spacing: 0.04em; z-index: 10;
+            }}
+        </style>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    </head>
+    <body>
+        <div id="container">
+            <div id="loading">⚡ LOADING 3D ANATOMICAL MODEL...</div>
+            <div id="hud">HEART // INTERACTIVE MODEL</div>
+            <div id="infoBox">💡 Drag to rotate • Scroll to zoom • Hover glowing nodes for details</div>
+        </div>
+        <script>
+            const container = document.getElementById('container');
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 0.3, 7.5);
+
+            const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.06;
+            controls.minDistance = 3;
+            controls.maxDistance = 16;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.1);
+            scene.add(ambientLight);
+
+            const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            keyLight.position.set(5, 8, 6);
+            scene.add(keyLight);
+
+            const rimLight = new THREE.DirectionalLight(0x00e5ff, 1.2);
+            rimLight.position.set(-6, 2, -4);
+            scene.add(rimLight);
+
+            const glowLight = new THREE.PointLight(0xff4d6d, 3, 25, 2);
+            glowLight.position.set(-3, -2, 4);
+            scene.add(glowLight);
+
+            const fillLight = new THREE.PointLight(0x00e5ff, 1.2, 20);
+            fillLight.position.set(3, 3, -3);
+            scene.add(fillLight);
+
+            const heartGroup = new THREE.Group();
+            scene.add(heartGroup);
+
+            let modelMesh = null;
+            const hotspotMeshes = [];
+
+            const hotspotFractions = [
+                {{ fx: 0.50, fy: 0.92, fz: 0.55, title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation." }},
+                {{ fx: 0.68, fy: 0.30, fz: 0.62, title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body." }},
+                {{ fx: 0.22, fy: 0.68, fz: 0.55, title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from systemic veins." }},
+                {{ fx: 0.55, fy: 0.55, fz: 0.85, title: "CORONARY ARTERY", desc: "Supplies oxygenated blood directly to cardiac tissue." }},
+                {{ fx: 0.32, fy: 0.28, fz: 0.60, title: "RIGHT VENTRICLE", desc: "Pumps deoxygenated blood to the lungs via the pulmonary artery." }}
+            ];
+
+            function addHotspots(box) {{
+                const hotspotGeo = new THREE.SphereGeometry(box.getSize(new THREE.Vector3()).length() * 0.02, 16, 16);
+                const hotspotMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff }});
+
+                hotspotFractions.forEach(data => {{
+                    const pos = new THREE.Vector3(
+                        THREE.MathUtils.lerp(box.min.x, box.max.x, data.fx),
+                        THREE.MathUtils.lerp(box.min.y, box.max.y, data.fy),
+                        THREE.MathUtils.lerp(box.min.z, box.max.z, data.fz)
+                    );
+                    const mesh = new THREE.Mesh(hotspotGeo, hotspotMat.clone());
+                    mesh.position.copy(pos);
+                    mesh.userData = data;
+                    heartGroup.add(mesh);
+                    hotspotMeshes.push(mesh);
+
+                    const ringSize = box.getSize(new THREE.Vector3()).length() * 0.03;
+                    const ringGeo = new THREE.RingGeometry(ringSize, ringSize * 1.25, 24);
+                    const ringMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide }});
+                    const ring = new THREE.Mesh(ringGeo, ringMat);
+                    ring.position.copy(pos);
+                    ring.lookAt(camera.position);
+                    heartGroup.add(ring);
+                    mesh.userData.ring = ring;
+                }});
+            }}
+
+            function finishLoading() {{
+                document.getElementById('loading').style.display = 'none';
+            }}
+
+            function buildFallbackHeart() {{
+                const shape = new THREE.Shape();
+                const x = 0, y = 0;
+                shape.moveTo(x, y + 0.7);
+                shape.bezierCurveTo(x, y + 1.1, x - 1.1, y + 1.3, x - 1.1, y + 0.55);
+                shape.bezierCurveTo(x - 1.1, y - 0.15, x - 0.55, y - 0.85, x, y - 1.6);
+                shape.bezierCurveTo(x + 0.55, y - 0.85, x + 1.1, y - 0.15, x + 1.1, y + 0.55);
+                shape.bezierCurveTo(x + 1.1, y + 1.3, x, y + 1.1, x, y + 0.7);
+                const geo = new THREE.ExtrudeGeometry(shape, {{
+                    steps: 4, depth: 1.1, bevelEnabled: true, bevelThickness: 0.35,
+                    bevelSize: 0.35, bevelOffset: 0, bevelSegments: 12, curveSegments: 24
+                }});
+                geo.center();
+                geo.computeVertexNormals();
+                const mat = new THREE.MeshPhysicalMaterial({{
+                    color: 0xb5121b, roughness: 0.35, metalness: 0.05,
+                    clearcoat: 0.6, clearcoatRoughness: 0.3, sheen: 1.0,
+                    sheenColor: new THREE.Color(0xff4d6d), emissive: 0x2a0508, emissiveIntensity: 0.4
+                }});
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.rotation.x = Math.PI;
+                heartGroup.add(mesh);
+                modelMesh = mesh;
+                const box = new THREE.Box3().setFromObject(mesh);
+                addHotspots(box);
+                finishLoading();
+                document.getElementById('hud').innerText = "HEART // STYLIZED FALLBACK";
+            }}
+
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                "{MODEL_URL}",
+                function (gltf) {{
+                    const model = gltf.scene;
+                    const rawBox = new THREE.Box3().setFromObject(model);
+                    const center = rawBox.getCenter(new THREE.Vector3());
+                    const size = rawBox.getSize(new THREE.Vector3());
+                    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+                    const scale = 3.4 / maxDim;
+
+                    model.position.sub(center);
+                    model.scale.setScalar(scale);
+
+                    model.traverse((child) => {{
+                        if (child.isMesh) {{
+                            if (child.material) {{
+                                child.material.metalness = Math.min(child.material.metalness ?? 0.1, 0.2);
+                                child.material.roughness = Math.max(child.material.roughness ?? 0.4, 0.35);
+                            }}
+                        }}
+                    }});
+
+                    heartGroup.add(model);
+                    modelMesh = model;
+
+                    const fittedBox = new THREE.Box3().setFromObject(model);
+                    addHotspots(fittedBox);
+                    finishLoading();
+                }},
+                undefined,
+                function (error) {{
+                    console.warn("Could not load heart.glb, using fallback shape:", error);
+                    buildFallbackHeart();
+                }}
+            );
+
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            const infoBox = document.getElementById('infoBox');
+            const defaultInfo = infoBox.innerHTML;
+            let isHoveringHotspot = false;
+
+            function updatePointer(clientX, clientY) {{
+                const rect = renderer.domElement.getBoundingClientRect();
+                mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+                mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(hotspotMeshes);
+
+                if (intersects.length > 0) {{
+                    const data = intersects[0].object.userData;
+                    infoBox.innerHTML = `<span class="part-tag">📍 ${{data.title}}:</span> ${{data.desc}}`;
+                    container.style.cursor = 'pointer';
+                    isHoveringHotspot = true;
+                }} else {{
+                    infoBox.innerHTML = defaultInfo;
+                    container.style.cursor = 'default';
+                    isHoveringHotspot = false;
+                }}
+            }}
+
+            window.addEventListener('mousemove', (e) => updatePointer(e.clientX, e.clientY));
+            window.addEventListener('touchmove', (e) => {{
+                if (e.touches.length > 0) updatePointer(e.touches[0].clientX, e.touches[0].clientY);
+            }}, {{ passive: true }});
+
+            const clock = new THREE.Clock();
+            const bpm = {hr};
+            const beatFreq = Math.max(0.4, bpm / 60);
+
+            function animate() {{
+                requestAnimationFrame(animate);
+                const t = clock.getElapsedTime() * beatFreq;
+
+                const pulse = 1 + Math.sin(t * 4) * 0.035 + Math.max(0, Math.sin(t * 8)) * 0.02;
+                heartGroup.scale.set(pulse, pulse, pulse);
+                if (!isHoveringHotspot) {{
+                    heartGroup.rotation.y += 0.0012;
+                }}
+
+                hotspotMeshes.forEach(m => {{
+                    const s = 1 + Math.sin(t * 6 + m.position.x) * 0.25;
+                    m.scale.set(s, s, s);
+                    if (m.userData.ring) m.userData.ring.lookAt(camera.position);
+                }});
+
+                glowLight.intensity = 2.5 + Math.sin(t * 4) * 1.0;
+
+                controls.update();
+                renderer.render(scene, camera);
+            }}
+            animate();
+
+            window.addEventListener('resize', () => {{
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=520)
+
+def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
+                             sleep_quality=None, steps=None, heart_rate_recovery=None,
+                             blood_pressure_variability=None):
+    heart_rate = st.session_state.heart_rate if heart_rate is None else heart_rate
+    resting_hr = st.session_state.resting_hr if resting_hr is None else resting_hr
+    hrv = st.session_state.hrv if hrv is None else hrv
+    sleep_quality = st.session_state.sleep_quality if sleep_quality is None else sleep_quality
+    steps = st.session_state.steps if steps is None else steps
+    heart_rate_recovery = st.session_state.heart_rate_recovery if heart_rate_recovery is None else heart_rate_recovery
+    blood_pressure_variability = (
+        st.session_state.blood_pressure_variability
+        if blood_pressure_variability is None else blood_pressure_variability
+    )
+
+    positives = []
+    concerns = []
+
+    if 60 <= heart_rate <= 100:
+        positives.append("Your heart rate is within the expected resting range.")
+    else:
+        concerns.append("Your heart rate is outside the expected resting range.")
+
+    if 50 <= resting_hr <= 80:
+        positives.append("Your resting heart rate looks healthy.")
+    else:
+        concerns.append("Your resting heart rate may be unusual.")
+
+    if hrv >= 50:
+        positives.append("Your heart rate variability is strong.")
+    else:
+        concerns.append("Your heart rate variability is lower than normal.")
+
+    if blood_pressure_variability <= 10:
+        positives.append("Your blood pressure variability is within a typical range.")
+    else:
+        concerns.append("Your blood pressure variability is higher than typical.")
+
+    if sleep_quality >= 80:
+        positives.append("Excellent sleep quality.")
+    elif sleep_quality >= 60:
+        concerns.append("Your sleep quality could improve.")
+    else:
+        concerns.append("Poor sleep quality detected.")
+
+    if steps >= 10000:
+        positives.append("You reached your daily activity goal.")
+    elif steps >= 7500:
+        positives.append("You stayed fairly active today.")
+    else:
+        concerns.append("Try increasing your daily activity.")
+
+    if heart_rate_recovery >= 20:
+        positives.append("Heart rate recovery looks healthy.")
+    else:
+        concerns.append("Heart rate recovery is slower than expected.")
+
+    metric_scores = [
+        metric_status("heart_rate", heart_rate)[2],
+        metric_status("resting_hr", resting_hr)[2],
+        metric_status("hrv", hrv)[2],
+        metric_status("bp_variability", blood_pressure_variability)[2],
+        metric_status("recovery", heart_rate_recovery)[2],
+        metric_status("sleep", sleep_quality)[2],
+        metric_status("steps", steps)[2],
+    ]
+    score = round(sum(metric_scores) / len(metric_scores))
+    score = max(0, min(100, score))
+    return score, positives, concerns
+
+def generate_ai_insight(score, positives, concerns):
+    if not concerns:
+        return (
+            "Based on today's readings, all monitored metrics fall within healthy ranges. "
+            "Heart rate, HRV, sleep, and activity levels look consistent with good cardiovascular status. "
+            "No specific action is indicated beyond continuing current habits and routine monitoring."
+        )
+    if score >= 90:
+        tone = "overall cardiovascular indicators remain strong, though a few areas are worth noting: "
+    elif score >= 75:
+        tone = "cardiovascular indicators are generally acceptable, with some areas that could benefit from attention: "
+    else:
+        tone = "several cardiovascular indicators fall outside typical healthy ranges and may warrant closer review: "
+
+    body = " ".join(concerns)
+    closing = (
+        " These observations are derived from wearable-device estimates, are not a diagnosis, "
+        "and should be confirmed by a clinician with appropriate testing before any treatment decision."
+    )
+    return "Based on today's readings, " + tone + body + closing
+
+def compute_period_stats(days, today_values):
+    metrics = [
+        "heart_rate", "resting_hr", "hrv", "blood_pressure_variability",
+        "heart_rate_recovery", "sleep_quality", "steps",
+    ]
+    dates_sorted = sorted(st.session_state.full_history.keys())
+    past_days = dates_sorted[-(days - 1):] if days > 1 else []
+
+    series = {m: [] for m in metrics}
+    labels = []
+    for d in past_days:
+        day = st.session_state.full_history[d]
+        labels.append(datetime.strptime(d, "%Y-%m-%d").strftime("%b %d"))
+        for m in metrics:
+            series[m].append(day[m])
+    labels.append("Today")
+    for m in metrics:
+        series[m].append(today_values[m])
+
+    summary = {}
+    for m in metrics:
+        vals = series[m]
+        first_half = vals[: max(1, len(vals) // 2)]
+        second_half = vals[max(1, len(vals) // 2):] or vals
+        avg_first = sum(first_half) / len(first_half)
+        avg_second = sum(second_half) / len(second_half)
+        if avg_second > avg_first * 1.03:
+            trend = "up"
+        elif avg_second < avg_first * 0.97:
+            trend = "down"
+        else:
+            trend = "flat"
+        summary[m] = {
+            "avg": round(sum(vals) / len(vals), 1),
+            "min": min(vals),
+            "max": max(vals),
+            "trend": trend,
+        }
+
+    return {"labels": labels, "series": series, "summary": summary, "days": days}
+
+def _pdf_safe(text):
+    return text.encode("latin-1", "ignore").decode("latin-1")
+
+class _PulseGuardPDF(FPDF):
+    def footer(self):
+        self.set_y(-16)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(140, 140, 140)
+        self.cell(0, 8, _pdf_safe(f"PulseGuard Health Report  |  Page {self.page_no()}"), align="C")
+
+def _pdf_section_header(pdf, text, content_width, rgb=(13, 23, 40)):
+    pdf.set_fill_color(*rgb)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(content_width, 9, "  " + _pdf_safe(text), border=0, fill=True, ln=True)
+    pdf.set_text_color(20, 20, 20)
+    pdf.ln(2)
+
+def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, resting_hr, hrv,
+                         bp, recovery, sleep_quality, steps, battery, last_sync, watch_name,
+                         period_label="Today", period_stats=None, patient_name=""):
+    pdf = _PulseGuardPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+    content_width = pdf.w - pdf.l_margin - pdf.r_margin
+    generated_on = datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
+
+    pdf.set_fill_color(8, 17, 31)
+    pdf.rect(0, 0, pdf.w, 32, style="F")
+    pdf.set_xy(pdf.l_margin, 8)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(0, 229, 255)
+    pdf.cell(content_width, 10, _pdf_safe("PulseGuard Cardiovascular Telemetry Export"), ln=True)
+    pdf.set_x(pdf.l_margin)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(200, 200, 200)
+    pdf.cell(content_width, 6, _pdf_safe("New Jersey Heart Disease Prevention (NJHDP)"), ln=True)
+    pdf.set_y(36)
+    pdf.set_text_color(20, 20, 20)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(90, 90, 90)
+    meta_label = patient_name.strip() or "Not provided"
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Patient / User: {meta_label}"))
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Period: {period_label}"), ln=True)
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Report Generated: {generated_on} ({last_sync} ET)"))
+    pdf.cell(content_width / 2, 6, _pdf_safe(f"Data Source Device: {watch_name}"), ln=True)
+    pdf.ln(3)
+
+    if score >= 90:
+        score_rgb = (0, 180, 200)
+        score_word = "Good"
+    elif score >= 75:
+        score_rgb = (191, 144, 0)
+        score_word = "Fair"
+    else:
+        score_rgb = (255, 77, 109)
+        score_word = "Needs Attention"
+
+    pdf.set_fill_color(245, 247, 250)
+    pdf.set_draw_color(*score_rgb)
+    pdf.set_line_width(0.6)
+    pdf.rect(pdf.l_margin, pdf.get_y(), content_width, 20, style="DF")
+    pdf.set_xy(pdf.l_margin + 4, pdf.get_y() + 4)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(*score_rgb)
+    pdf.cell(content_width - 8, 10, _pdf_safe(f"Heart Health Score: {score}/100  ({score_word})"))
+    pdf.ln(20)
+    pdf.set_text_color(20, 20, 20)
+    pdf.ln(4)
+
+    _pdf_section_header(pdf, f"Telemetry Readings — {period_label}", content_width)
+    pdf.set_font("Helvetica", "", 10.5)
+
+    rows = [
+        ("Heart Rate", f"{heart_rate} BPM"),
+        ("Resting Heart Rate", f"{resting_hr} BPM"),
+        ("Heart Rate Variability", f"{hrv} ms"),
+        ("Blood Pressure Variability", f"{bp} mmHg"),
+        ("Heart Rate Recovery", f"{recovery} BPM"),
+        ("Sleep Quality", f"{sleep_quality}%"),
+        ("Daily Steps", f"{steps:,}"),
+        ("Logged Context", ", ".join(st.session_state.logged_symptoms) if st.session_state.logged_symptoms else "None reported"),
+    ]
+    label_width = 95
+    value_width = content_width - label_width
+    for i, (label, value) in enumerate(rows):
+        fill = (245, 245, 245) if i % 2 == 0 else (255, 255, 255)
+        pdf.set_fill_color(*fill)
+        pdf.set_draw_color(225, 225, 225)
+        pdf.cell(label_width, 8, "  " + _pdf_safe(label), border="B", fill=True)
+        pdf.cell(value_width, 8, _pdf_safe(value), border="B", fill=True, ln=True)
+    pdf.ln(5)
+
+    if positives:
+        _pdf_section_header(pdf, "Favorable Findings", content_width, rgb=(0, 150, 170))
+        pdf.set_font("Helvetica", "", 10.5)
+        for p in positives:
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(content_width, 6, _pdf_safe(f"-  {p}"))
+        pdf.ln(2)
+
+    if concerns:
+        _pdf_section_header(pdf, "Findings Warranting Follow-Up", content_width, rgb=(255, 77, 109))
+        pdf.set_font("Helvetica", "", 10.5)
+        for c in concerns:
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(content_width, 6, _pdf_safe(f"-  {c}"))
+        pdf.ln(2)
+
+    _pdf_section_header(pdf, "Summary for Clinical Review", content_width)
+    pdf.set_font("Helvetica", "", 10.5)
+    pdf.set_x(pdf.l_margin)
+    clinical_intro = (
+        f"The following automated summary is derived from consumer wearable-device estimates "
+        f"over the selected reporting period ({period_label}). It is intended to support, not "
+        f"replace, clinical judgment."
+    )
+    pdf.multi_cell(content_width, 6, _pdf_safe(clinical_intro))
+    pdf.ln(1)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(content_width, 6, _pdf_safe(ai_insight))
+    pdf.ln(4)
+
+    return bytes(pdf.output())
+
+def animate_score(final_score):
+    c = score_color(final_score)
+    st.markdown(
+        f"""
+        <div class="glass-card" style="text-align:center; padding:32px;">
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8A99AD;">Overall Vital Status</div>
+            <div style="font-size:56px; font-weight:800; color:{c}; margin:8px 0; text-shadow:0 0 30px {hex_to_rgba(c, 0.4)};">
+                {final_score}<span style="font-size:24px; color:#8A99AD;">/100</span>
+            </div>
+            <div style="display:inline-block; padding:4px 16px; border-radius:20px; background:{hex_to_rgba(c,0.15)}; color:{c}; font-weight:600; font-size:13px; border:1px solid {hex_to_rgba(c,0.3)};">
+                {"EXCELLENT" if final_score>=80 else ("STABLE" if final_score>=60 else "ATTENTION REQUIRED")}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --------------------------------------------------
+# Top Floating Modern Navigation Header
+# --------------------------------------------------
+NAV_ITEMS = [
+    "🏠 Home",
+    "❤️ Heart Dashboard",
+    "⌚ Smartwatch",
+    "📈 Health Summary",
+    "🤖 AI Assistant",
+    "💡 Accuracy Tips",
+    "ℹ️ About"
+]
+
+if "current_page" not in st.session_state:
+    st.session_state.current_page = NAV_ITEMS[0]
+
+# Application Layout Header
+st.markdown(
+    f"""
+    <div class="top-navbar">
+        <div class="navbar-brand">
+            <img src="{LOGO_URL}" width="38" style="border-radius:10px; filter: drop-shadow(0 0 8px rgba(0,229,255,0.4));">
+            <div>
+                <div class="navbar-title">PulseGuard</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; background:rgba(0, 229, 255, 0.08); border:1px solid rgba(0, 229, 255, 0.2); padding:4px 12px; border-radius:20px; margin-left:12px;">
+                <div class="pulse-dot"></div>
+                <span style="font-size:11px; font-weight:700; color:#00E5FF; letter-spacing:0.05em;">LIVE MONITORING</span>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:16px;">
+            <div style="font-size:12px; color:#8A99AD; font-family:'JetBrains Mono', monospace;">
+                {datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y")}
+            </div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# Pill Navigation Bar
+_nav_cols = st.columns(len(NAV_ITEMS))
+for _col, _item in zip(_nav_cols, NAV_ITEMS):
+    with _col:
+        _is_active = st.session_state.current_page == _item
+        if st.button(_item, key=f"nav_{_item}", use_container_width=True,
+                     type="primary" if _is_active else "secondary"):
+            st.session_state.current_page = _item
+            st.rerun()
+
+st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+
+page = st.session_state.current_page
+
+# --------------------------------------------------
+# Device & Live Data Controls
+# --------------------------------------------------
+with st.expander("⚙️ Device & Live Data Controls", expanded=False):
+    st.caption("Customize live parameters or test automated simulation profiles.")
+    device_col, action_col = st.columns([2, 1])
+    with device_col:
+        st.subheader("⌚ Select Wearable Interface")
+        st.session_state.selected_watch = st.selectbox(
+            "Simulated device",
+            list(WATCH_OPTIONS.keys()),
+            index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
+        )
+        watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
+    with action_col:
+        st.subheader("🎲 Controls")
+        if st.button("🎲 Simulate New Reading", use_container_width=True):
+            st.session_state.heart_rate = random.randint(55, 130)
+            st.session_state.resting_hr = random.randint(45, 90)
+            st.session_state.hrv = random.randint(15, 90)
+            st.session_state.blood_pressure_variability = random.randint(0, 20)
+            st.session_state.heart_rate_recovery = random.randint(5, 40)
+            st.session_state.sleep_quality = random.randint(30, 100)
+            st.session_state.steps = random.randint(500, 15000)
+            st.session_state.battery = random.randint(10, 100)
+
+        st.session_state.autoplay = st.checkbox(
+            "▶️ Auto-Play Demo Scenarios",
+            value=st.session_state.autoplay
+        )
+
+    st.markdown("---")
+    slider_row1 = st.columns(4)
+    with slider_row1[0]:
+        heart_rate = st.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
+    with slider_row1[1]:
+        resting_hr = st.slider("💓 Resting HR (BPM)", 30, 130, key="resting_hr")
+    with slider_row1[2]:
+        hrv = st.slider("📊 HRV (ms)", 0, 150, key="hrv")
+    with slider_row1[3]:
+        blood_pressure_variability = st.slider("🩺 BP Var (mmHg)", 0, 40, key="blood_pressure_variability")
+
+    slider_row2 = st.columns(4)
+    with slider_row2[0]:
+        heart_rate_recovery = st.slider("🏃 Recovery (BPM)", 0, 60, key="heart_rate_recovery")
+    with slider_row2[1]:
+        sleep_quality = st.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
+    with slider_row2[2]:
+        steps = st.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
+    with slider_row2[3]:
+        battery = st.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
+
+watch_connected = True
+last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
+
+# =====================================================
+# HOME PAGE
+# =====================================================
+if page == "🏠 Home":
+
+    _today_score, _today_positives, _today_concerns = generate_health_summary()
+    _score_color = score_color(_today_score)
+
+    current_hour = datetime.now(ZoneInfo("America/New_York")).hour
+    time_greeting = "Good morning" if current_hour < 12 else ("Good afternoon" if current_hour < 18 else "Good evening")
+
+    anomalies = []
+    if resting_hr > 75:
+        anomalies.append(f"Resting HR is elevated above baseline")
+    if hrv < 35:
+        anomalies.append(f"Sudden HRV drop detected (Low parasympathetic recovery)")
+    if blood_pressure_variability > 12:
+        anomalies.append("Blood pressure variability spike detected")
+
+    if anomalies:
+        st.markdown(
+            f"""
+            <div class="alert-banner">
+                <div style="font-size:24px;">🚨</div>
+                <div>
+                    <div style="font-weight:800; color:#FF4D6D; font-size:15px; text-transform:uppercase; letter-spacing:0.05em;">Cardiovascular Threshold Alert</div>
+                    <div style="color:#F0F4F8; font-size:13.5px; margin-top:2px;">{' • '.join(anomalies)}. Consider taking a rest break and staying hydrated.</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # Hero Banner & Physician Quick-Share
+    hero_col, share_col = st.columns([3, 1])
+    with hero_col:
+        st.markdown(
+            f"""
+            <div class="glass-card" style="padding:28px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.9) 0%, rgba(8, 17, 31, 0.95) 100%);">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px;">
+                    <div>
+                        <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                            <span style="font-size:24px;">{time_greeting}!</span>
+                            <div style="display:flex; align-items:center; gap:6px; background:rgba(0, 229, 255, 0.1); border:1px solid rgba(0, 229, 255, 0.3); padding:4px 12px; border-radius:20px;">
+                                <div class="pulse-dot"></div>
+                                <span style="font-size:12px; font-weight:700; color:#00E5FF;">MONITORING ACTIVE</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+                            <h2 style="font-size:26px; font-weight:800; margin:0; color:#FFFFFF;">Your heart health is looking steady today.</h2>
+                            <div style="background:{hex_to_rgba(_score_color, 0.15)}; border:1px solid {hex_to_rgba(_score_color, 0.4)}; padding:6px 14px; border-radius:12px; display:inline-flex; align-items:center; gap:6px;">
+                                <span style="font-size:11px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Heart Score</span>
+                                <span style="font-size:18px; font-weight:800; color:{_score_color};">{_today_score}</span>
+                                <span style="font-size:12px; color:#8A99AD;">/100</span>
+                            </div>
+                        </div>
+                        <p style="font-size:13.5px; color:#8A99AD; margin-top:8px; margin-bottom:0;">Wearable telemetry actively monitoring cardiovascular dynamics and autonomic stability.</p>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with share_col:
+        st.markdown(
+            f"""
+            <div class="glass-card" style="padding:20px; text-align:center;">
+                <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Physician Telemetry</div>
+                <div style="font-size:13px; color:#F0F4F8; margin:8px 0 14px 0;">Export full 24h formatted vitals snapshot for doctor check-in.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        pdf_bytes = generate_pdf_report(
+            _today_score, _today_positives, _today_concerns,
+            generate_ai_insight(_today_score, _today_positives, _today_concerns),
+            heart_rate, resting_hr, hrv, blood_pressure_variability, heart_rate_recovery,
+            sleep_quality, steps, battery, last_sync, watch_plain_name
+        )
+        st.download_button(
+            "📋 Share Current Vitals",
+            data=pdf_bytes,
+            file_name="PulseGuard_Telemetry_Export.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary"
+        )
+
+    st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+
+    # Symptom Logger & Environmental AQI Widget
+    col_symp, col_env = st.columns([2, 1])
+    
+    with col_symp:
+        st.markdown('<div class="glass-card" style="padding:20px;">', unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:700; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>⚡ Quick Symptom & Context Logger</div>", unsafe_allow_html=True)
+        
+        tags = ["☕ Caffeine", "🍷 Alcohol", "🧘 High Stress", "💊 Medication Taken", "🫀 Chest Discomfort"]
+        symp_cols = st.columns(len(tags))
+        for idx, tag in enumerate(tags):
+            with symp_cols[idx]:
+                is_selected = tag in st.session_state.logged_symptoms
+                btn_type = "primary" if is_selected else "secondary"
+                if st.button(tag, key=f"symp_{idx}", use_container_width=True, type=btn_type):
+                    if is_selected:
+                        st.session_state.logged_symptoms.remove(tag)
+                    else:
+                        st.session_state.logged_symptoms.append(tag)
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_env:
+        st.markdown(
+            f"""
+            <div class="glass-card" style="padding:20px;">
+                <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px;">🌡️ Environmental & Air Quality</div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                    <div>
+                        <div style="font-size:20px; font-weight:800; color:#FFFFFF;">78°F <span style="font-size:12px; color:#8A99AD;">• 62% Humidity</span></div>
+                        <div style="font-size:12px; color:#00E5FF; margin-top:2px;">AQI 42 — Good Air Quality</div>
+                    </div>
+                    <div style="background:rgba(0, 229, 255, 0.1); border:1px solid rgba(0, 229, 255, 0.3); padding:6px 12px; border-radius:12px; text-align:center;">
+                        <span style="font-size:11px; font-weight:700; color:#00E5FF;">LOW CARDIO STRAIN</span>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+
+    # Dynamic Micro-Insights Section
+    st.subheader("📊 Vital Health Status")
+    
+    hr_status, hr_color, _ = metric_status("heart_rate", heart_rate)
+    hrv_status, hrv_color, _ = metric_status("hrv", hrv)
+    rhr_status, rhr_color, _ = metric_status("resting_hr", resting_hr)
+    bp_status, bp_color, _ = metric_status("bp_variability", blood_pressure_variability)
+
+    stat_cols = st.columns(4)
+    with stat_cols[0]:
+        render_metric_card("Heart Rate Status", hr_status, hr_color, "Indicates overall cardiac work efficiency and rhythm balance.")
+    with stat_cols[1]:
+        render_metric_card("Resting HR Level", rhr_status, rhr_color, "Lower resting baseline indicates stronger physical conditioning.")
+    with stat_cols[2]:
+        render_metric_card("HRV Recovery Status", hrv_status, hrv_color, "Reflects parasympathetic recovery after physical or mental stress.")
+    with stat_cols[3]:
+        render_metric_card("BP Variability", bp_status, bp_color, "Measures vascular resistance and smooth autonomic adaptation.")
+
+    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+
+    # Daily Habits Progress & Medication Checklist
+    grid_habits, grid_meds = st.columns([2, 1])
+
+    with grid_habits:
+        st.markdown('<div class="glass-card" style="padding:20px;">', unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>🎯 Daily Goal & Habit Progress</div>", unsafe_allow_html=True)
+
+        active_mins = min(45, int((steps / 10000) * 35))
+        active_pct = min(100, int((active_mins / 30) * 100))
+        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>🔥 Active Zone Minutes</span><span style='color:#00E5FF; font-weight:700;'>{active_mins} / 30 mins</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{active_pct}%; background:#00E5FF;'></div></div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
+
+        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>😴 Sleep Quality Score</span><span style='color:#7C5CFF; font-weight:700;'>{sleep_quality}% Quality</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{sleep_quality}%; background:#7C5CFF;'></div></div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-bottom:16px;'></div>", unsafe_allow_html=True)
+
+        hyd_pct = min(100, int((st.session_state.hydration_oz / 64) * 100))
+        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>💧 Hydration Goal</span><span style='color:#4F8BFF; font-weight:700;'>{st.session_state.hydration_oz} / 64 oz</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{hyd_pct}%; background:#4F8BFF;'></div></div>", unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with grid_meds:
+        st.markdown('<div class="glass-card" style="padding:20px;">', unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>💊 Prescription & Supplement Checklist</div>", unsafe_allow_html=True)
+        
+        for med_name, checked in st.session_state.meds_state.items():
+            st.session_state.meds_state[med_name] = st.checkbox(med_name, value=checked)
+            
+        st.caption("Cross-references intake with resting heart rate response times.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# =====================================================
+# HEART DASHBOARD PAGE
+# =====================================================
+elif page == "❤️ Heart Dashboard":
+
+    st.markdown("<h2 style='font-weight:800;'>❤️ Cardiovascular Analytics</h2>", unsafe_allow_html=True)
+    st.caption("Deep-dive metrics evaluating real-time heart rate dynamics and autonomic recovery.")
+    st.markdown("---")
+
+    tab_vitals, tab_3d, tab_ecg = st.tabs(["📊 VITALS", "🫀 3D MODEL", "💓 ECG WAVEFORM"])
+
+    with tab_vitals:
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            _, color, _ = metric_status("heart_rate", heart_rate)
+            render_metric_card("Heart Rate", f"{heart_rate} BPM", color)
+        with col2:
+            _, color, _ = metric_status("resting_hr", resting_hr)
+            render_metric_card("Resting Heart Rate", f"{resting_hr} BPM", color)
+        with col3:
+            _, color, _ = metric_status("hrv", hrv)
+            render_metric_card("Heart Rate Variability", f"{hrv} ms", color)
+
+        st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
+
+        col4, col5, col6 = st.columns(3)
+        with col4:
+            _, color, _ = metric_status("bp_variability", blood_pressure_variability)
+            render_metric_card("Blood Pressure Variability", f"{blood_pressure_variability} mmHg", color)
+        with col5:
+            _, color, _ = metric_status("recovery", heart_rate_recovery)
+            render_metric_card("Heart Rate Recovery", f"{heart_rate_recovery} BPM", color)
+        with col6:
+            _, color, _ = metric_status("sleep", sleep_quality)
+            render_metric_card("Sleep Quality", f"{sleep_quality}%", color)
+
+    with tab_3d:
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("🫀 Interactive 3D Anatomical Heart")
+        st.caption("Drag to rotate, scroll to zoom, hover the glowing nodes to explore key structures.")
+        render_3d_heart(heart_rate)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-bottom:20px;'></div>", unsafe_allow_html=True)
+        render_heart_structure_reference()
+
+    with tab_ecg:
+        st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("💓 Simulated Real-Time Waveform (ECG)")
+        render_ecg_animation(heart_rate)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# =====================================================
+# SMARTWATCH CONNECTION PAGE
+# =====================================================
+elif page == "⌚ Smartwatch":
+
+    st.markdown("<h2 style='font-weight:800;'>⌚ Connected Wearable Device</h2>", unsafe_allow_html=True)
+    st.caption("Interface and telemetry streaming settings for paired devices.")
+    st.markdown("---")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(
+            f"""
+            <div class="glass-card" style="border-left: 4px solid #00E5FF;">
+                <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Connected Device</div>
+                <div style="font-size:28px; font-weight:800; color:#FFFFFF; margin:8px 0;">{watch_plain_name}</div>
+                <div style="display:flex; gap:16px; margin-top:16px;">
+                    <div><span style="color:#8A99AD; font-size:12px;">Battery:</span> <strong style="color:#00E5FF;">{battery}%</strong></div>
+                    <div><span style="color:#8A99AD; font-size:12px;">Last Sync:</span> <strong>{last_sync}</strong></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with col2:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("Supported Ecosystems")
+        st.write("⚡ Apple HealthKit • WHOOP • Oura Ring • Garmin Connect • Google Fit")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# =====================================================
+# HEALTH SUMMARY PAGE
+# =====================================================
+elif page == "📈 Health Summary":
+
+    st.markdown("<h2 style='font-weight:800;'>📈 Daily Health Summary & Analytics</h2>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    score, positives, concerns = generate_health_summary()
+
+    gauge_col, anim_col = st.columns([1, 1])
+    with gauge_col:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        render_score_gauge(score)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with anim_col:
+        animate_score(score)
+
+    st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("🧠 PulseGuard AI Clinical Summary")
+    ai_insight = generate_ai_insight(score, positives, concerns)
+    st.write(ai_insight)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if positives:
+        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+        st.write("### ✅ Favorable Parameters")
+        render_chips([(p, GOOD) for p in positives])
+
+    if concerns:
+        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+        st.write("### ⚠ Areas Requiring Attention")
+        render_chips([(c, DANGER) for c in concerns])
+
+# =====================================================
+# AI CHAT ASSISTANT PAGE
+# =====================================================
+elif page == "🤖 AI Assistant":
+
+    st.markdown("<h2 style='font-weight:800;'>🤖 PulseGuard AI Assistant</h2>", unsafe_allow_html=True)
+    st.caption("Ask questions about your telemetry, resting trends, or HRV values.")
+    st.markdown("---")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = [
+            ("assistant", "Hello! I am your PulseGuard AI companion. How can I help analyze your cardiovascular metrics today?")
+        ]
+
+    for role, content in st.session_state.chat_history:
+        if role == "user":
+            st.markdown(f'<div class="chat-bubble-user">{content}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="chat-bubble-ai">🤖 <strong>PulseGuard AI:</strong><br>{content}</div>', unsafe_allow_html=True)
+
+    user_question = st.chat_input("Ask a question about your heart health...")
+    if user_question:
+        st.session_state.chat_history.append(("user", user_question))
+        st.session_state.chat_history.append(("assistant", "I am currently analyzing your recent metrics against population standards to formulate a personal answer..."))
+        st.rerun()
+
+# =====================================================
+# ACCURACY TIPS PAGE
+# =====================================================
+elif page == "💡 Accuracy Tips":
+
+    st.markdown("<h2 style='font-weight:800;'>💡 Optimization & Sensor Accuracy</h2>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            """
+            <div class="glass-card">
+                <h3>⌚ Wearable Placement</h3>
+                <p style="color:#8A99AD;">Ensure your wearable fits snugly above the wrist bone. Movement artifacts can create false PPG polling spikes.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with c2:
+        st.markdown(
+            """
+            <div class="glass-card">
+                <h3>💧 Hydration & Signal Quality</h3>
+                <p style="color:#8A99AD;">Dehydration lowers blood volume, leading to elevated resting heart rates and reduced Heart Rate Variability (HRV).</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+# =====================================================
+# ABOUT PAGE
+# =====================================================
+elif page == "ℹ️ About":
+
+    st.markdown("<h2 style='font-weight:800;'>ℹ️ About PulseGuard Platform</h2>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown(
+        """
+        <div class="glass-card">
+            <h3>Mission Overview</h3>
+            <p style="color:#8A99AD;">PulseGuard is developed in coordination with New Jersey Heart Disease Prevention (NJHDP) to transform wearable telemetry into preventative cardiovascular health insights.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --------------------------------------------------
+# Footer & Autoplay Logic
+# --------------------------------------------------
+st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div style="text-align:center; padding:24px; color:#8A99AD; font-size:12px; border-top:1px solid rgba(255,255,255,0.05);">
+        PulseGuard Health Telemetry • Version 2.0 Actionable Dashboard<br>
+        New Jersey Heart Disease Prevention (NJHDP)
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+if st.session_state.autoplay:
+    time.sleep(3)
+    idx = st.session_state.scenario_idx % len(SCENARIOS)
+    scenario = SCENARIOS[idx]
+    for _k, _v in scenario.items():
+        st.session_state[_k] = _v
+    st.session_state.scenario_idx = idx + 1
+    st.rerun()
