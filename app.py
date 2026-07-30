@@ -1,3 +1,7 @@
+import os
+import json
+import urllib.request
+import urllib.error
 import streamlit as st
 import streamlit.components.v1 as components
 import random
@@ -11,6 +15,11 @@ from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
 
 # --------------------------------------------------
+# Gemini model configuration
+GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-1.5-mini")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY", None)
+
+# --------------------------------------------------
 # Set up page configuration
 # --------------------------------------------------
 st.set_page_config(
@@ -19,6 +28,70 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
+
+loader_html = """
+<style>
+@keyframes pulseguardFadeOut {
+    from { opacity: 1; visibility: visible; }
+    to { opacity: 0; visibility: hidden; }
+}
+#pulseguard-loader {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(7, 18, 26, 0.98);
+    animation: pulseguardFadeOut 0.8s ease 1.5s forwards;
+}
+.pulseguard-loader-inner {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    transform: translate(0, 0) scale(1);
+}
+.pulseguard-loader-logo {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(0, 229, 255, 0.2);
+    border: 1px solid rgba(255,255,255,0.08);
+}
+.pulseguard-loader-text {
+    color: #E6F3FA;
+    font-family: Inter, sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-shadow: 0 0 18px rgba(0,229,255,0.15);
+}
+.pulseguard-loader-subtext {
+    color: #9fb0c0;
+    font-family: Inter, sans-serif;
+    font-size: 14px;
+    margin-top: 6px;
+}
+</style>
+<div id="pulseguard-loader">
+    <div class="pulseguard-loader-inner">
+        <img src="{{LOGO_URL}}" class="pulseguard-loader-logo" />
+        <div>
+            <div class="pulseguard-loader-text">PulseGuard</div>
+            <div class="pulseguard-loader-subtext">Loading your heart intelligence...</div>
+        </div>
+    </div>
+</div>
+""".replace("{{LOGO_URL}}", LOGO_URL)
+
+if "loader_shown" not in st.session_state:
+    st.session_state.loader_shown = True
+
+if st.session_state.loader_shown:
+    st.markdown(loader_html, unsafe_allow_html=True)
+    st.session_state.loader_shown = False
 
 # --------------------------------------------------
 # Safe HTML rendering patch
@@ -31,8 +104,6 @@ def _safe_markdown(body, *args, **kwargs):
     return _original_markdown(body, *args, **kwargs)
 
 st.markdown = _safe_markdown
-
-LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
 
 # --------------------------------------------------
 # Session state defaults
@@ -61,9 +132,6 @@ for _key, _val in _defaults.items():
     if _key not in st.session_state:
         st.session_state[_key] = _val
 
-
-def commit_patient_name():
-    st.session_state.patient_name = st.session_state.get("patient_name", "")
 
 if "connected_since" not in st.session_state:
     fake_days_ago = random.randint(2, 45)
@@ -161,6 +229,102 @@ def score_color(score):
     else:
         return DANGER
 
+def get_ai_system_prompt():
+    return (
+        "You are PulseGuard AI Assistant, a knowledgeable and empathetic health companion. "
+        "Use only the available data from the user's current vitals and wearable telemetry. "
+        "Provide clear, actionable guidance, but do not provide a medical diagnosis. "
+        "Always remind the user that this is informational and that a clinician should confirm any clinical decisions."
+    )
+
+def build_ai_context():
+    score, _, _ = generate_health_summary(
+        heart_rate=st.session_state.heart_rate,
+        resting_hr=st.session_state.resting_hr,
+        hrv=st.session_state.hrv,
+        sleep_quality=st.session_state.sleep_quality,
+        steps=st.session_state.steps,
+        heart_rate_recovery=st.session_state.heart_rate_recovery,
+        blood_pressure_variability=st.session_state.blood_pressure_variability,
+    )
+    trend_days = sorted(st.session_state.full_history.keys())[-7:]
+    trend_summary = []
+    for d in trend_days:
+        day = st.session_state.full_history[d]
+        trend_summary.append(
+            f"{d}: HR {day['heart_rate']} BPM, RHR {day['resting_hr']} BPM, HRV {day['hrv']} ms, Sleep {day['sleep_quality']}%, Steps {day['steps']}"
+        )
+
+    return (
+        "Current telemetry and trends:\n"
+        f"- Heart rate: {st.session_state.heart_rate} BPM\n"
+        f"- Resting heart rate: {st.session_state.resting_hr} BPM\n"
+        f"- Heart rate variability (HRV): {st.session_state.hrv} ms\n"
+        f"- Sleep quality: {st.session_state.sleep_quality}%\n"
+        f"- Daily steps: {st.session_state.steps}\n"
+        f"- Heart rate recovery: {st.session_state.heart_rate_recovery} BPM\n"
+        f"- Blood pressure variability: {st.session_state.blood_pressure_variability} mmHg\n"
+        f"- Computed heart score: {score}\n"
+        "Recent 7-day trend summary:\n"
+        + "\n".join(trend_summary)
+    )
+
+def get_ai_response(user_question):
+    system_prompt = get_ai_system_prompt()
+    context = build_ai_context()
+    if not GEMINI_API_KEY:
+        return (
+            "Gemini is not configured. Please set GOOGLE_API_KEY in your environment "
+            "or Streamlit secrets to enable the Gemini Assistant."
+        )
+
+    prompt = (
+        f"{system_prompt}\n\n{context}\n\nUser question: {user_question}\nAssistant:")
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta2/models/{GEMINI_MODEL}:generateText?key={GEMINI_API_KEY}"
+    )
+    body = {
+        "prompt": {"text": prompt},
+        "temperature": 0.7,
+        "maxOutputTokens": 512,
+    }
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        if "candidates" in data and data["candidates"]:
+            return data["candidates"][0].get("output", "").strip()
+        return "Gemini returned no response."
+    except urllib.error.HTTPError as exc:
+        try:
+            error_body = exc.read().decode("utf-8")
+            error_json = json.loads(error_body)
+            message = error_json.get("error", {}).get("message", error_body)
+        except Exception:
+            message = exc.reason
+        return f"Gemini API request failed: {message}"
+    except Exception as exc:
+        return f"Gemini request failed: {exc}"
+
+
+def get_doctor_recommendation(score):
+    """Translate the heart score into a plain-language doctor-visit
+    recommendation, paired with the matching status color."""
+    if score < 40:
+        message = "Your heart score is quite low right now — we'd strongly recommend seeing a doctor as soon as you can. Download the PDF below and bring it with you."
+    elif score < 50:
+        message = "Your heart score suggests it's a good idea to see a doctor soon. Download the PDF below so they have your recent trends."
+    elif score < 75:
+        message = "Your heart score is in a borderline range — consider checking in with a doctor if this continues. Downloading the PDF below can help them see the full picture."
+    else:
+        message = "Your heart score looks strong right now, so a doctor visit isn't urgent. It's still good practice to download the PDF below and keep a record."
+    return message, score_color(score)
+
 # --------------------------------------------------
 # Advanced Ultra-Premium CSS & Custom Theme Architecture
 # --------------------------------------------------
@@ -253,6 +417,85 @@ div[data-testid="column"] button[key^="nav_"] p {
     transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s !important;
     position: relative;
     overflow: hidden;
+}
+
+/* Native Streamlit bordered container (st.container(border=True)) styled to
+   match glass-card, so widgets that need real nesting (charts, radios, etc.)
+   don't have to rely on the broken open/close-div markdown trick. */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background: linear-gradient(180deg, rgba(8,18,30,0.64), rgba(10,20,34,0.56)) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 8px 30px rgba(2,8,20,0.6), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stRadio"],
+div[data-testid="stRadio"],
+div[role="radiogroup"],
+div[role="radiogroup"] * {
+    color: #D7E1EC !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stRadio"] label,
+div[data-testid="stRadio"] label,
+div[data-testid="stRadio"] span,
+div[data-testid="stRadio"] div[role="radiogroup"] label,
+div[data-testid="stRadio"] div[role="radiogroup"] span,
+div[data-testid="stRadio"] div[role="radiogroup"] button,
+div[data-testid="stRadio"] button,
+div[data-testid="stRadio"] button span,
+div[data-testid="stRadio"] button div,
+div[role="radiogroup"] label,
+div[role="radiogroup"] span,
+div[role="radiogroup"] button {
+    color: #D7E1EC !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+}
+
+div[data-testid="stRadio"] label:hover,
+div[data-testid="stRadio"] span:hover,
+div[data-testid="stRadio"] button:hover,
+div[role="radiogroup"] button:hover,
+div[role="radiogroup"] label:hover,
+div[role="radiogroup"] span:hover {
+    color: #00E5FF !important;
+}
+
+div[data-testid="stRadio"] input:checked + label,
+div[data-testid="stRadio"] input:checked + span,
+div[data-testid="stRadio"] button[aria-checked="true"],
+div[data-testid="stRadio"] button[aria-pressed="true"],
+div[data-testid="stRadio"] div[role="radiogroup"] label[aria-checked="true"],
+div[role="radiogroup"] button[aria-checked="true"],
+div[role="radiogroup"] button[aria-pressed="true"],
+div[role="radiogroup"] label[aria-checked="true"] {
+    color: #00E5FF !important;
+}
+
+div[data-testid="stRadio"] button[aria-checked="true"],
+div[data-testid="stRadio"] button[aria-pressed="true"],
+div[role="radiogroup"] button[aria-checked="true"],
+div[role="radiogroup"] button[aria-pressed="true"] {
+    background: rgba(0, 229, 255, 0.1) !important;
+    border-color: rgba(0, 229, 255, 0.2) !important;
+}
+
+div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"],
+div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] * {
+    color: #D7E1EC !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+}
+
+div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"],
+div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"] * {
+    color: #00E5FF !important;
+}
+
+div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] p {
+    color: inherit !important;
 }
 
 .glass-card:hover {
@@ -459,6 +702,27 @@ div[data-baseweb="input"] input,
 div[data-baseweb="select"] input {
     color: #E6F3FA !important;
     background-color: transparent !important;
+}
+
+div[data-testid="stChatInput"] input,
+div[data-testid="stChatInput"] textarea,
+div[data-testid="stChatInput"] div[data-baseweb="input"] > div,
+div[data-testid="stChatInput"] div[data-baseweb="textarea"] > div,
+.stChatInput input,
+.stChatInput textarea,
+.stChatInput div[data-baseweb="input"] > div,
+.stChatInput div[data-baseweb="textarea"] > div {
+    background-color: rgba(13, 23, 40, 0.75) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    color: #E6F3FA !important;
+    border-radius: 10px !important;
+}
+
+div[data-testid="stChatInput"] input::placeholder,
+div[data-testid="stChatInput"] textarea::placeholder,
+.stChatInput input::placeholder,
+.stChatInput textarea::placeholder {
+    color: rgba(230,243,250,0.55) !important;
 }
 
 /* Universal Streamlit Download Button Override */
@@ -784,29 +1048,75 @@ def render_ecg_animation(hr):
     components.html(html_code, height=155)
 
 HEART_STRUCTURES = [
-    {"title": "Aorta", "desc": "The main artery routing freshly oxygenated blood from the heart out to the rest of the body."},
-    {"title": "Left Ventricle", "desc": "The heart's primary pumping chamber — thick, muscular, and responsible for sending blood to the entire body."},
-    {"title": "Right Atrium", "desc": "Receives deoxygenated blood returning from the body's veins before it's sent to the lungs."},
-    {"title": "Coronary Artery", "desc": "Supplies oxygenated blood directly to the heart muscle itself, keeping the heart alive."},
-    {"title": "Right Ventricle", "desc": "Pumps deoxygenated blood onward to the lungs via the pulmonary artery to be re-oxygenated."},
+    {"title": "Aorta", "desc": "The main artery routing freshly oxygenated blood from the heart out to the rest of the body. Weakening or narrowing here (aneurysm or stenosis) can restrict blood flow to the whole body."},
+    {"title": "Left Ventricle", "desc": "The heart's primary pumping chamber — thick, muscular, and responsible for sending blood to the entire body. Long-term high blood pressure or elevated heart rate can cause its walls to thicken (hypertrophy)."},
+    {"title": "Right Atrium", "desc": "Receives deoxygenated blood returning from the body's veins before it's sent to the lungs. Irregular electrical signals starting here are a common trigger for atrial fibrillation."},
+    {"title": "Coronary Artery", "desc": "Supplies oxygenated blood directly to the heart muscle itself, keeping the heart alive. Plaque buildup here (atherosclerosis) is the leading cause of heart attacks."},
+    {"title": "Right Ventricle", "desc": "Pumps deoxygenated blood onward to the lungs via the pulmonary artery to be re-oxygenated. Chronic strain here can signal pulmonary hypertension or lung-related heart stress."},
+    {"title": "SA Node", "desc": "The heart's natural pacemaker — a small cluster of cells that sets your resting heart rate. A sustained resting rate above 100 BPM (tachycardia) makes this node fire faster, forcing the heart to work harder than it should."},
+    {"title": "Left Atrium", "desc": "Receives freshly oxygenated blood from the lungs before it moves to the left ventricle. It's especially vulnerable to atrial fibrillation, which raises stroke risk if untreated."},
+    {"title": "Pulmonary Artery", "desc": "Carries deoxygenated blood from the right ventricle to the lungs. A blood clot lodging here (pulmonary embolism) is a medical emergency."},
+    {"title": "Mitral Valve", "desc": "Controls blood flow between the left atrium and left ventricle. Its leaflets can leak (regurgitation) or stiffen and narrow (stenosis), both of which force the heart to work harder."},
+    {"title": "Myocardium", "desc": "The thick muscular wall of the heart that does the actual pumping. Poor heart rate recovery after exertion often points to reduced cardiovascular fitness in this muscle."},
 ]
 
 def render_heart_structure_reference():
-    cols = st.columns(len(HEART_STRUCTURES))
-    for _col, _struct in zip(cols, HEART_STRUCTURES):
-        with _col:
-            st.markdown(
-                f"""
-                <div class="heart-struct-card">
-                    <div class="heart-struct-title">📍 {_struct['title']}</div>
-                    <div class="heart-struct-desc">{_struct['desc']}</div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    for row_start in range(0, len(HEART_STRUCTURES), 5):
+        row_structs = HEART_STRUCTURES[row_start:row_start + 5]
+        cols = st.columns(len(row_structs))
+        for _col, _struct in zip(cols, row_structs):
+            with _col:
+                st.markdown(
+                    f"""
+                    <div class="heart-struct-card">
+                        <div class="heart-struct-title">📍 {_struct['title']}</div>
+                        <div class="heart-struct-desc">{_struct['desc']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
-def render_3d_heart(hr=72):
+def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, heart_rate_recovery=27):
     MODEL_URL = "https://cdn.jsdelivr.net/gh/FreddieSawiras/NJHDP-PulseGaurd@main/assets/scene.gltf"
+
+    # Pull live status/color for the data-tied hotspots so hovering them
+    # reflects the person's actual current readings, not generic text.
+    hr_label, hr_color, _ = metric_status("heart_rate", hr)
+    hrv_label, hrv_color, _ = metric_status("hrv", hrv)
+    bp_label, bp_color, _ = metric_status("bp_variability", blood_pressure_variability)
+    recovery_label, recovery_color, _ = metric_status("recovery", heart_rate_recovery)
+
+    if hr > 100:
+        sa_node_desc = (
+            f"Your natural pacemaker. Live reading: {hr} BPM ({hr_label}). Sustained rates above "
+            f"100 BPM force the heart to work harder and, over time, can strain the heart muscle."
+        )
+    elif hr < 60:
+        sa_node_desc = (
+            f"Your natural pacemaker. Live reading: {hr} BPM ({hr_label}). Rates this low are normal for "
+            f"very fit hearts, but if paired with dizziness they can signal the node is firing too slowly."
+        )
+    else:
+        sa_node_desc = (
+            f"Your natural pacemaker. Live reading: {hr} BPM ({hr_label}) — a healthy resting range that "
+            f"keeps oxygen delivery efficient without overworking the heart."
+        )
+
+    if recovery_label in ("Fair", "Delayed"):
+        myocardium_desc = (
+            f"The thick muscular wall that does the actual pumping. Your heart rate recovery is "
+            f"{heart_rate_recovery} BPM/min ({recovery_label}) — slower recovery after exertion can point "
+            f"to reduced cardiovascular fitness in this muscle."
+        )
+    else:
+        myocardium_desc = (
+            f"The thick muscular wall that does the actual pumping. Your heart rate recovery of "
+            f"{heart_rate_recovery} BPM/min ({recovery_label}) shows this muscle bouncing back efficiently after exertion."
+        )
+
+    def _js_color(hex_color):
+        return "0x" + hex_color.lstrip("#")
 
     html_code = f"""
     <!DOCTYPE html>
@@ -889,16 +1199,20 @@ def render_3d_heart(hr=72):
             const hotspotMeshes = [];
 
             const hotspotFractions = [
-                {{ fx: 0.50, fy: 0.92, fz: 0.55, title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation." }},
-                {{ fx: 0.68, fy: 0.30, fz: 0.62, title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body." }},
-                {{ fx: 0.22, fy: 0.68, fz: 0.55, title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from systemic veins." }},
-                {{ fx: 0.55, fy: 0.55, fz: 0.85, title: "CORONARY ARTERY", desc: "Supplies oxygenated blood directly to cardiac tissue." }},
-                {{ fx: 0.32, fy: 0.28, fz: 0.60, title: "RIGHT VENTRICLE", desc: "Pumps deoxygenated blood to the lungs via the pulmonary artery." }}
+                {{ fx: 0.50, fy: 0.92, fz: 0.55, title: "AORTA", desc: "Main artery routing oxygenated blood to systemic circulation. Narrowing or weakening here (aneurysm/stenosis) can restrict blood flow to the whole body.", color: 0x00e5ff }},
+                {{ fx: 0.68, fy: 0.30, fz: 0.62, title: "LEFT VENTRICLE", desc: "Primary muscular pumping chamber sending blood to the body. Long-term high blood pressure can thicken its walls (hypertrophy).", color: 0x00e5ff }},
+                {{ fx: 0.22, fy: 0.68, fz: 0.55, title: "RIGHT ATRIUM", desc: "Receives deoxygenated blood returning from systemic veins. A common origin point for atrial fibrillation.", color: 0x00e5ff }},
+                {{ fx: 0.55, fy: 0.55, fz: 0.85, title: "CORONARY ARTERY", desc: "Supplies oxygenated blood directly to cardiac tissue. Plaque buildup here (atherosclerosis) is the leading cause of heart attacks.", color: 0x00e5ff }},
+                {{ fx: 0.32, fy: 0.28, fz: 0.60, title: "RIGHT VENTRICLE", desc: "Pumps deoxygenated blood to the lungs via the pulmonary artery. Chronic strain here can signal pulmonary hypertension.", color: 0x00e5ff }},
+                {{ fx: 0.25, fy: 0.82, fz: 0.50, title: "SA NODE (LIVE)", desc: "{sa_node_desc}", color: {_js_color(hr_color)} }},
+                {{ fx: 0.65, fy: 0.72, fz: 0.42, title: "LEFT ATRIUM", desc: "Receives freshly oxygenated blood from the lungs. Especially vulnerable to atrial fibrillation, which raises stroke risk if untreated.", color: 0x00e5ff }},
+                {{ fx: 0.42, fy: 0.88, fz: 0.38, title: "PULMONARY ARTERY", desc: "Carries deoxygenated blood to the lungs. A clot lodging here (pulmonary embolism) is a medical emergency.", color: 0x00e5ff }},
+                {{ fx: 0.58, fy: 0.48, fz: 0.68, title: "MITRAL VALVE", desc: "Controls flow between left atrium and ventricle. Leaflets can leak (regurgitation) or narrow (stenosis), forcing the heart to work harder.", color: 0x00e5ff }},
+                {{ fx: 0.50, fy: 0.10, fz: 0.60, title: "MYOCARDIUM (LIVE)", desc: "{myocardium_desc}", color: {_js_color(recovery_color)} }}
             ];
 
             function addHotspots(box) {{
                 const hotspotGeo = new THREE.SphereGeometry(box.getSize(new THREE.Vector3()).length() * 0.02, 16, 16);
-                const hotspotMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff }});
 
                 hotspotFractions.forEach(data => {{
                     const pos = new THREE.Vector3(
@@ -906,7 +1220,8 @@ def render_3d_heart(hr=72):
                         THREE.MathUtils.lerp(box.min.y, box.max.y, data.fy),
                         THREE.MathUtils.lerp(box.min.z, box.max.z, data.fz)
                     );
-                    const mesh = new THREE.Mesh(hotspotGeo, hotspotMat.clone());
+                    const hotspotMat = new THREE.MeshBasicMaterial({{ color: data.color }});
+                    const mesh = new THREE.Mesh(hotspotGeo, hotspotMat);
                     mesh.position.copy(pos);
                     mesh.userData = data;
                     heartGroup.add(mesh);
@@ -914,7 +1229,7 @@ def render_3d_heart(hr=72):
 
                     const ringSize = box.getSize(new THREE.Vector3()).length() * 0.03;
                     const ringGeo = new THREE.RingGeometry(ringSize, ringSize * 1.25, 24);
-                    const ringMat = new THREE.MeshBasicMaterial({{ color: 0x00e5ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide }});
+                    const ringMat = new THREE.MeshBasicMaterial({{ color: data.color, transparent: true, opacity: 0.5, side: THREE.DoubleSide }});
                     const ring = new THREE.Mesh(ringGeo, ringMat);
                     ring.position.copy(pos);
                     ring.lookAt(camera.position);
@@ -1131,6 +1446,70 @@ def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
     score = max(0, min(100, score))
     return score, positives, concerns
 
+def get_score_trend(days=7):
+    """Recompute the health score for each of the last `days` days from
+    full_history, for the trend sparkline."""
+    dates = sorted(st.session_state.full_history.keys())[-days:]
+    trend = []
+    for d in dates:
+        day = st.session_state.full_history[d]
+        day_score, _, _ = generate_health_summary(
+            heart_rate=day["heart_rate"],
+            resting_hr=day["resting_hr"],
+            hrv=day["hrv"],
+            sleep_quality=day["sleep_quality"],
+            steps=day["steps"],
+            heart_rate_recovery=day["heart_rate_recovery"],
+            blood_pressure_variability=day["blood_pressure_variability"],
+        )
+        trend.append(day_score)
+    trend.append(generate_health_summary()[0])  # today
+    return trend
+
+def get_biggest_driver():
+    """Return (label, is_concern) for whichever tracked metric is furthest
+    from its optimal range, or None if everything is currently optimal."""
+    named_scores = [
+        ("Heart rate", metric_status("heart_rate", st.session_state.heart_rate)[2]),
+        ("Resting heart rate", metric_status("resting_hr", st.session_state.resting_hr)[2]),
+        ("Heart rate variability", metric_status("hrv", st.session_state.hrv)[2]),
+        ("Blood pressure variability", metric_status("bp_variability", st.session_state.blood_pressure_variability)[2]),
+        ("Heart rate recovery", metric_status("recovery", st.session_state.heart_rate_recovery)[2]),
+        ("Sleep quality", metric_status("sleep", st.session_state.sleep_quality)[2]),
+        ("Daily steps", metric_status("steps", st.session_state.steps)[2]),
+    ]
+    worst_label, worst_score = min(named_scores, key=lambda pair: pair[1])
+    if worst_score >= 100:
+        return None
+    return worst_label, True
+
+def render_trend_sparkline(scores):
+    """Render a small inline SVG sparkline for the score trend, as a single
+    self-contained HTML block (avoids the Streamlit sibling-div nesting bug)."""
+    if len(scores) < 2:
+        st.caption("Not enough history yet to chart a trend.")
+        return
+    w, h, pad = 320, 46, 6
+    lo, hi = min(scores), max(scores)
+    span = max(1, hi - lo)
+    step = (w - 2 * pad) / (len(scores) - 1)
+    points = []
+    for i, s in enumerate(scores):
+        x = pad + i * step
+        y = pad + (h - 2 * pad) * (1 - (s - lo) / span)
+        points.append(f"{x:.1f},{y:.1f}")
+    line_color = GOOD if scores[-1] >= scores[0] else DANGER
+    last_x, last_y = points[-1].split(",")
+    st.markdown(
+        f"""
+        <svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="display:block;">
+            <polyline points="{' '.join(points)}" fill="none" stroke="{line_color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="{last_x}" cy="{last_y}" r="3.5" fill="{line_color}"/>
+        </svg>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def generate_ai_insight(score, positives, concerns):
     if not concerns:
         return (
@@ -1254,7 +1633,7 @@ def generate_doctor_report_pdf(rows, period_label, patient_name=""):
     pdf.set_text_color(20, 20, 20)
 
     # Connecting patient_name explicitly from parameter or session state
-    actual_name = patient_name.strip() or st.session_state.get("patient_name", "").strip()
+    actual_name = patient_name.strip()
     meta_label = actual_name if actual_name else "Not provided"
     
     pdf.set_font("Helvetica", "", 10)
@@ -1347,7 +1726,7 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(90, 90, 90)
-    actual_name = patient_name.strip() or st.session_state.get("patient_name", "").strip()
+    actual_name = patient_name.strip()
     meta_label = actual_name if actual_name else "Not provided"
     
     pdf.cell(content_width / 2, 6, _pdf_safe(f"Patient / User: {meta_label}"))
@@ -1466,6 +1845,12 @@ NAV_ITEMS = [
 if "current_page" not in st.session_state:
     st.session_state.current_page = NAV_ITEMS[0]
 
+if "heart_dashboard_tab" not in st.session_state:
+    st.session_state.heart_dashboard_tab = "📊 VITALS"
+
+if "health_summary_scroll_target" not in st.session_state:
+    st.session_state.health_summary_scroll_target = None
+
 # Application Layout Header
 st.markdown(
     f"""
@@ -1520,7 +1905,8 @@ with st.expander("⚙️ Device & Live Data Controls", expanded=False):
         watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
     with action_col:
         st.subheader("🎲 Controls")
-        if st.button("🎲 Simulate New Reading", use_container_width=True):
+
+        def _simulate_new_reading():
             st.session_state.heart_rate = random.randint(55, 130)
             st.session_state.resting_hr = random.randint(45, 90)
             st.session_state.hrv = random.randint(15, 90)
@@ -1529,6 +1915,8 @@ with st.expander("⚙️ Device & Live Data Controls", expanded=False):
             st.session_state.sleep_quality = random.randint(30, 100)
             st.session_state.steps = random.randint(500, 15000)
             st.session_state.battery = random.randint(10, 100)
+
+        st.button("🎲 Simulate New Reading", use_container_width=True, on_click=_simulate_new_reading)
 
         st.session_state.autoplay = st.checkbox(
             "▶️ Auto-Play Demo Scenarios",
@@ -1635,16 +2023,18 @@ if page == "🏠 Home":
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
     qa_cols = st.columns(4)
     with qa_cols[0]:
-        if st.button("🎲 Simulate New Vitals", use_container_width=True):
+        def _simulate_quick_vitals():
             st.session_state.heart_rate = random.randint(55, 130)
             st.session_state.resting_hr = random.randint(45, 90)
             st.session_state.hrv = random.randint(15, 90)
             st.session_state.steps = random.randint(1000, 14000)
             st.session_state.activity_feed.insert(0, {"time": "Just now", "event": "Simulated new telemetry sync"})
-            st.rerun()
+
+        st.button("🎲 Simulate New Vitals", use_container_width=True, on_click=_simulate_quick_vitals)
     with qa_cols[1]:
         if st.button("📋 Download Clinical Report", use_container_width=True):
             st.session_state.current_page = "📈 Health Summary"
+            st.session_state.health_summary_scroll_target = "doctor_report"
             st.rerun()
     with qa_cols[2]:
         if st.button("🤖 Ask AI Assistant", use_container_width=True):
@@ -1653,6 +2043,7 @@ if page == "🏠 Home":
     with qa_cols[3]:
         if st.button("🫀 Open 3D Heart Model", use_container_width=True):
             st.session_state.current_page = "❤️ Heart Dashboard"
+            st.session_state.heart_dashboard_tab = "🫀 3D MODEL"
             st.rerun()
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
@@ -1727,9 +2118,18 @@ elif page == "❤️ Heart Dashboard":
     st.caption("Deep-dive metrics evaluating real-time heart rate dynamics and autonomic recovery.")
     st.markdown("---")
 
-    tab_vitals, tab_3d, tab_ecg = st.tabs(["📊 VITALS", "🫀 3D MODEL", "💓 ECG WAVEFORM"])
+    heart_dashboard_tabs = ["📊 VITALS", "🫀 3D MODEL", "💓 ECG WAVEFORM"]
+    current_section = st.radio(
+        "",
+        heart_dashboard_tabs,
+        index=heart_dashboard_tabs.index(st.session_state.heart_dashboard_tab),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="heart_dashboard_tab",
+    )
+    st.markdown("<div style='margin-bottom:18px;'></div>", unsafe_allow_html=True)
 
-    with tab_vitals:
+    if current_section == "📊 VITALS":
         st.markdown("<div style='margin-bottom:14px;'></div>", unsafe_allow_html=True)
 
         col1, col2, col3 = st.columns(3)
@@ -1762,18 +2162,24 @@ elif page == "❤️ Heart Dashboard":
             render_vital_card("😴", "Sleep Quality", f"{sleep_quality}%", status, color, pct,
                                "Restful sleep target: 80%+ quality score")
 
-    with tab_3d:
+    elif current_section == "🫀 3D MODEL":
         st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.subheader("🫀 Interactive 3D Anatomical Heart")
-        st.caption("Drag to rotate, scroll to zoom, hover the glowing nodes to explore key structures.")
-        render_3d_heart(heart_rate)
+        st.caption("Drag to rotate, scroll to zoom, hover the glowing nodes to explore key structures. Nodes marked LIVE reflect your current readings.")
+        render_3d_heart(
+            hr=heart_rate,
+            hrv=hrv,
+            resting_hr=resting_hr,
+            blood_pressure_variability=blood_pressure_variability,
+            heart_rate_recovery=heart_rate_recovery,
+        )
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<div style='margin-bottom:20px;'></div>", unsafe_allow_html=True)
         render_heart_structure_reference()
 
-    with tab_ecg:
+    else:
         st.markdown("<div style='margin-bottom:8px;'></div>", unsafe_allow_html=True)
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.subheader("💓 Simulated Real-Time Waveform (ECG)")
@@ -1821,20 +2227,70 @@ elif page == "📈 Health Summary":
 
     score, positives, concerns = generate_health_summary()
 
+    # Trend strip: 7/30-day score sparkline with a range toggle.
+    with st.container(border=True):
+        trend_label_col, trend_range_col = st.columns([2, 1])
+        with trend_range_col:
+            trend_range = st.radio(
+                "Trend range", ["7d", "30d"], horizontal=True,
+                label_visibility="collapsed", key="score_trend_range",
+            )
+        trend_days = 7 if trend_range == "7d" else 30
+        trend_scores = get_score_trend(days=trend_days)
+        trend_delta = trend_scores[-1] - trend_scores[0]
+        delta_color = GOOD if trend_delta >= 0 else DANGER
+        delta_sign = "+" if trend_delta >= 0 else ""
+        with trend_label_col:
+            st.markdown(
+                f"""
+                <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#8A99AD;">Score trend, last {trend_range}</div>
+                <div style="font-size:14px; color:{delta_color}; margin-top:2px;">{delta_sign}{trend_delta} vs {trend_range} ago</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        render_trend_sparkline(trend_scores)
+
+    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+
     gauge_col, anim_col = st.columns([1, 1])
     with gauge_col:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        render_score_gauge(score)
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            render_score_gauge(score)
     with anim_col:
         animate_score(score)
 
+    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+
+    # Biggest-driver callout.
+    driver = get_biggest_driver()
+    with st.container(border=True):
+        if driver:
+            driver_label, _ = driver
+            st.markdown(
+                f"""
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="font-size:18px;">⚡</span>
+                    <span style="font-size:14px; color:#E6F3FA;">{driver_label} is the biggest drag on today's score.</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="font-size:18px;">✨</span>
+                    <span style="font-size:14px; color:#E6F3FA;">Every tracked metric is in a healthy range today.</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
     st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("🧠 PulseGuard AI Clinical Summary")
-    ai_insight = generate_ai_insight(score, positives, concerns)
-    st.write(ai_insight)
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.subheader("🧠 PulseGuard AI Clinical Summary")
+        ai_insight = generate_ai_insight(score, positives, concerns)
+        st.write(ai_insight)
 
     if positives:
         st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
@@ -1847,22 +2303,23 @@ elif page == "📈 Health Summary":
         render_chips([(c, DANGER) for c in concerns])
 
     st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+    st.markdown('<div id="health_summary_report"></div>', unsafe_allow_html=True)
     
     # Custom styling applied to the Doctor Report section to override Streamlit defaults
     st.markdown(
         """
         <style>
         /* Report card theme matching overall glass style */
-        #report-card { color: #EAF6FF !important; }
-        #report-card .report-metric-value { color: #FFFFFF !important; font-weight:800; font-size:36px; opacity:1 !important; text-shadow: 0 2px 10px rgba(0,0,0,0.6); }
-        #report-card .report-metric-label { color:#9fb0c0 !important; font-size:12px; margin-top:6px; }
+        .st-key-report_card { color: #EAF6FF !important; }
+        .st-key-report_card .report-metric-value { color: #FFFFFF !important; font-weight:800; font-size:36px; opacity:1 !important; text-shadow: 0 2px 10px rgba(0,0,0,0.6); }
+        .st-key-report_card .report-metric-label { color:#9fb0c0 !important; font-size:12px; margin-top:6px; }
 
         /* Direct native input overrides to enforce dark background & match UI scheme */
-        #report-card input[type="text"],
-        #report-card div[data-baseweb="select"] > div,
-        #report-card div[data-baseweb="input"] > div,
-        #report-card .stTextInput input,
-        #report-card .stSelectbox [data-baseweb="select"] {
+        .st-key-report_card input[type="text"],
+        .st-key-report_card div[data-baseweb="select"] > div,
+        .st-key-report_card div[data-baseweb="input"] > div,
+        .st-key-report_card .stTextInput input,
+        .st-key-report_card .stSelectbox [data-baseweb="select"] {
             background-color: rgba(13, 23, 40, 0.75) !important;
             border: 1px solid rgba(255, 255, 255, 0.12) !important;
             color: #E6F3FA !important;
@@ -1870,8 +2327,8 @@ elif page == "📈 Health Summary":
         }
 
         /* Download Button Styling - Dark Primary Gradient */
-        #report-card button[kind="primary"],
-        #report-card div.stDownloadButton > button {
+        .st-key-report_card button[kind="primary"],
+        .st-key-report_card div.stDownloadButton > button {
             background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
             color: #051022 !important;
             font-weight: 700 !important;
@@ -1880,8 +2337,8 @@ elif page == "📈 Health Summary":
             box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
             transition: all 0.2s ease !important;
         }
-        #report-card button[kind="primary"]:hover,
-        #report-card div.stDownloadButton > button:hover {
+        .st-key-report_card button[kind="primary"]:hover,
+        .st-key-report_card div.stDownloadButton > button:hover {
             transform: translateY(-2px) !important;
             box-shadow: 0 10px 35px rgba(0,229,255,0.4) !important;
         }
@@ -1890,87 +2347,123 @@ elif page == "📈 Health Summary":
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div id="report-card" class="glass-card">', unsafe_allow_html=True)
-    st.subheader("🩺 Download Doctor Report")
-    st.caption("Choose a reporting window and export a PDF summary for your clinician.")
+    report_card = st.container(border=True, key="report_card")
+    with report_card:
+        rec_message, rec_color = get_doctor_recommendation(score)
+        st.markdown(
+            f"""
+            <div style="display:flex; align-items:center; gap:12px; padding-bottom:16px; margin-bottom:16px; border-bottom:1px solid rgba(255,255,255,0.08);">
+                <span style="font-size:22px;">🩺</span>
+                <span style="font-size:14px; color:{rec_color}; font-weight:600; line-height:1.5;">{rec_message}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.subheader("🩺 Download Doctor Report")
+        st.caption("Choose a reporting window and export a PDF summary for your clinician.")
 
-    # Render Patient Name above the Report Window selector and save to session_state
-    patient_name = st.text_input(
-        "Patient name",
-        key="patient_name",
-        placeholder="Enter patient or user name",
-        on_change=commit_patient_name,
-    )
-
-    period_key = st.selectbox(
-        "Report window",
-        ["24h", "7d", "30d", "custom"],
-        format_func=lambda option: {
-            "24h": "Last 24 hours",
-            "7d": "Last 7 days",
-            "30d": "Last 30 days",
-            "custom": "Custom date range",
-        }[option],
-        index=1,
-    )
-
-    if period_key == "custom":
-        custom_start_col, custom_end_col = st.columns(2)
-        with custom_start_col:
-            start_date = st.date_input("Start date", value=datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=6))
-        with custom_end_col:
-            end_date = st.date_input("End date", value=datetime.now(ZoneInfo("America/New_York")).date())
-        if end_date < start_date:
-            st.warning("End date must be after the start date.")
-            report_ready = False
-        else:
-            report_ready = True
-    else:
-        start_date = None
-        end_date = None
-        report_ready = True
-
-    if report_ready:
-        start_dt, end_dt, period_label = build_report_window(period_key, start_date, end_date)
-        report_rows = get_report_rows(start_dt, end_dt)
-        summary = summarize_report_rows(report_rows)
-
-        if report_rows:
-            st.write(f"Selected range: {period_label} • {len(report_rows)} daily entries")
-            mcols = st.columns(4)
-            labels = ["Avg Heart Rate", "Avg Sleep", "Avg Steps", "Peak Steps"]
-            values = [
-                f"{summary.get('avg_heart_rate', 'n/a')} BPM",
-                f"{summary.get('avg_sleep', 'n/a')}%",
-                f"{summary.get('avg_steps', 'n/a'):,}",
-                f"{summary.get('max_steps', 'n/a'):,}",
-            ]
-            for col, lab, val in zip(mcols, labels, values):
-                with col:
-                    st.markdown(
-                        f"""
-                        <div style='text-align:left; padding:12px 8px;'>
-                            <div class='report-metric-value'>{val}</div>
-                            <div class='report-metric-label'>{lab}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-        else:
-            st.info("No telemetry history is available for the selected range.")
-
-        pdf_bytes = generate_doctor_report_pdf(report_rows, period_label, patient_name=patient_name)
-        
-        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
-        st.download_button(
-            label="⬇️ Download PDF for Doctor",
-            data=pdf_bytes,
-            file_name=f"pulseguard_{period_key}_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d')}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
+        # Render Patient Name above the Report Window selector and save to session_state
+        patient_name = st.text_input(
+            "Patient name",
+            value=st.session_state.get("patient_name", ""),
+            placeholder="Enter patient or user name",
         )
 
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.session_state.patient_name = patient_name
+
+        period_key = st.selectbox(
+            "Report window",
+            ["24h", "7d", "30d", "custom"],
+            format_func=lambda option: {
+                "24h": "Last 24 hours",
+                "7d": "Last 7 days",
+                "30d": "Last 30 days",
+                "custom": "Custom date range",
+            }[option],
+            index=1,
+        )
+
+        if period_key == "custom":
+            custom_start_col, custom_end_col = st.columns(2)
+            with custom_start_col:
+                start_date = st.date_input("Start date", value=datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=6))
+            with custom_end_col:
+                end_date = st.date_input("End date", value=datetime.now(ZoneInfo("America/New_York")).date())
+            if end_date < start_date:
+                st.warning("End date must be after the start date.")
+                report_ready = False
+            else:
+                report_ready = True
+        else:
+            start_date = None
+            end_date = None
+            report_ready = True
+
+        if report_ready:
+            start_dt, end_dt, period_label = build_report_window(period_key, start_date, end_date)
+            report_rows = get_report_rows(start_dt, end_dt)
+            summary = summarize_report_rows(report_rows)
+
+            if report_rows:
+                st.write(f"Selected range: {period_label} • {len(report_rows)} daily entries")
+                mcols = st.columns(4)
+                labels = ["Avg Heart Rate", "Avg Sleep", "Avg Steps", "Peak Steps"]
+                values = [
+                    f"{summary.get('avg_heart_rate', 'n/a')} BPM",
+                    f"{summary.get('avg_sleep', 'n/a')}%",
+                    f"{summary.get('avg_steps', 'n/a'):,}",
+                    f"{summary.get('max_steps', 'n/a'):,}",
+                ]
+                for col, lab, val in zip(mcols, labels, values):
+                    with col:
+                        st.markdown(
+                            f"""
+                            <div style='text-align:left; padding:12px 8px;'>
+                                <div class='report-metric-value'>{val}</div>
+                                <div class='report-metric-label'>{lab}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+            else:
+                st.info("No telemetry history is available for the selected range.")
+
+            st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+
+            # Generate the PDF via an explicit button click. Clicking a normal
+            # button always forces any pending text_input edits (like patient
+            # name) to sync to the backend first, so the PDF is guaranteed to
+            # be built with the latest typed value instead of a stale one.
+            if st.button("📝 Generate Report", use_container_width=True):
+                st.session_state.doctor_report_pdf_bytes = generate_doctor_report_pdf(
+                    report_rows, period_label, patient_name=patient_name
+                )
+                st.session_state.doctor_report_period_key = period_key
+
+            if st.session_state.get("doctor_report_pdf_bytes"):
+                downloaded = st.download_button(
+                    label="⬇️ Download PDF for Doctor",
+                    data=st.session_state.doctor_report_pdf_bytes,
+                    file_name=f"pulseguard_{st.session_state.get('doctor_report_period_key', period_key)}_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+                # Once downloaded, clear it so the button disappears — the person
+                # has to press Generate Report again (with whatever name/window
+                # they currently have set) before they can download again.
+                if downloaded:
+                    st.session_state.doctor_report_pdf_bytes = None
+                    st.rerun()
+            else:
+                st.caption("Click **Generate Report** to build the PDF before downloading.")
+
+    if st.session_state.health_summary_scroll_target == "doctor_report":
+        components.html(
+            "<script>setTimeout(()=>{const parent = window.parent || window; const el = parent.document.getElementById('health_summary_report'); if(el){el.scrollIntoView({behavior:'smooth', block:'start'});}}, 250);</script>",
+            height=1,
+        )
+        st.session_state.health_summary_scroll_target = None
+
 
 # =====================================================
 # AI CHAT ASSISTANT PAGE
@@ -1994,8 +2487,10 @@ elif page == "🤖 AI Assistant":
 
     user_question = st.chat_input("Ask a question about your heart health...")
     if user_question:
+        with st.spinner("Analyzing your telemetry and preparing a response..."):
+            assistant_response = get_ai_response(user_question)
         st.session_state.chat_history.append(("user", user_question))
-        st.session_state.chat_history.append(("assistant", "I am currently analyzing your recent metrics against population standards to formulate a personal answer..."))
+        st.session_state.chat_history.append(("assistant", assistant_response))
         st.rerun()
 
 # =====================================================
