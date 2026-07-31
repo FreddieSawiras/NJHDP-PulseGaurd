@@ -1,3 +1,3 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+    "python.defaultInterpreterPath": "C:\\Users\\jacqu\\OneDrive\\Desktop\\PulseGaurd\\NJHDP-PulseGaurd\\.venv\\Scripts\\python.exe"
 }

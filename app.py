@@ -31,6 +31,139 @@ st.set_page_config(
 
 LOGO_URL = "https://plain-enam-prod-public.komododecks.com/202607/27/VZS1Q3WWHJ5eZyOEZXiM/image.png"
 
+# ==========================================================
+# GOOGLE SHEETS AUTH — username | password_hash | email | created_at
+# ==========================================================
+import hashlib
+import gspread
+from google.oauth2.service_account import Credentials
+
+AUTH_SHEET_NAME = "PulseGuard_Users"
+AUTH_WORKSHEET_NAME = "Sheet1"
+AUTH_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+@st.cache_resource
+def get_auth_worksheet():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=AUTH_SCOPES)
+    client = gspread.authorize(creds)
+    sheet = client.open(AUTH_SHEET_NAME)
+    return sheet.worksheet(AUTH_WORKSHEET_NAME)
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def _get_all_users(worksheet):
+    return {row["username"]: row for row in worksheet.get_all_records()}
+
+
+def _create_user(worksheet, username, password, email=""):
+    worksheet.append_row([
+        username,
+        _hash_password(password),
+        email,
+        datetime.now(ZoneInfo("America/New_York")).isoformat(),
+    ])
+
+
+def _verify_login(worksheet, username, password):
+    user = _get_all_users(worksheet).get(username)
+    return bool(user) and user["password_hash"] == _hash_password(password)
+
+
+def _username_exists(worksheet, username):
+    return username in _get_all_users(worksheet)
+
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "auth_username" not in st.session_state:
+    st.session_state.auth_username = None
+
+
+def render_login_gate():
+    st.markdown("""
+        <style>
+            html, body, [data-testid="stAppViewContainer"] {
+                background-color: #07121a !important;
+            }
+            section[data-testid="stSidebar"], header[data-testid="stHeader"] { display: none !important; }
+            .pg-login-wrap { max-width: 440px; margin: 6vh auto 0 auto; text-align: center; }
+            .pg-login-logo { width: 56px; height: 56px; border-radius: 14px; margin-bottom: 14px;
+                box-shadow: 0 24px 60px rgba(0,229,255,0.2); }
+            .pg-login-title { font-family: Inter, sans-serif; font-size: 30px; font-weight: 800;
+                color: #E6F3FA; letter-spacing: -0.01em; margin-bottom: 4px; }
+            .pg-login-sub { font-family: Inter, sans-serif; color: #8A99AD; margin-bottom: 28px; font-size: 14px; }
+        </style>
+        <div class="pg-login-wrap">
+            <img src="{logo}" class="pg-login-logo" />
+            <div class="pg-login-title">PulseGuard</div>
+            <div class="pg-login-sub">Sign in to access your heart health dashboard</div>
+        </div>
+    """.replace("{logo}", LOGO_URL), unsafe_allow_html=True)
+
+    try:
+        worksheet = get_auth_worksheet()
+    except Exception as e:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.error(
+                "Could not connect to the Google Sheet database. Check that "
+                "st.secrets['gcp_service_account'] is configured and the sheet "
+                "is shared with the service account."
+            )
+            st.exception(e)
+        st.stop()
+
+    col1, col2, col3 = st.columns([1, 1.3, 1])
+    with col2:
+        tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
+
+        with tab_login:
+            with st.form("pg_login_form"):
+                username = st.text_input("Username")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Log in", use_container_width=True)
+                if submitted:
+                    if not username or not password:
+                        st.error("Please enter both username and password.")
+                    elif _verify_login(worksheet, username, password):
+                        st.session_state.logged_in = True
+                        st.session_state.auth_username = username
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
+
+        with tab_signup:
+            with st.form("pg_signup_form"):
+                new_username = st.text_input("Choose a username")
+                new_email = st.text_input("Email (optional)")
+                new_password = st.text_input("Choose a password", type="password")
+                confirm_password = st.text_input("Confirm password", type="password")
+                submitted = st.form_submit_button("Sign up", use_container_width=True)
+                if submitted:
+                    if not new_username or not new_password:
+                        st.error("Username and password are required.")
+                    elif new_password != confirm_password:
+                        st.error("Passwords do not match.")
+                    elif _username_exists(worksheet, new_username):
+                        st.error("That username is already taken.")
+                    else:
+                        _create_user(worksheet, new_username, new_password, new_email)
+                        st.success("Account created! You can now log in from the Log in tab.")
+
+    st.stop()
+
+
+if not st.session_state.logged_in:
+    render_login_gate()
+
 loader_html = """
 <style>
 @keyframes pulseguardFadeOut {
@@ -1884,6 +2017,13 @@ for _col, _item in zip(_nav_cols, NAV_ITEMS):
                      type="primary" if _is_active else "secondary"):
             st.session_state.current_page = _item
             st.rerun()
+
+_top_spacer_col, _logout_col = st.columns([10, 1.3])
+with _logout_col:
+    if st.button(f"🔓 Log out ({st.session_state.auth_username})", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.auth_username = None
+        st.rerun()
 
 st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
