@@ -1,23 +1,34 @@
 import os
 import json
-import urllib.request
-import urllib.error
+from urllib.parse import quote
 import streamlit as st
 import streamlit.components.v1 as components
 import random
 import time
 import io
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from fpdf import FPDF
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from google import genai
+from google.genai import errors as genai_errors
 
 # --------------------------------------------------
 # Gemini model configuration
-GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-1.5-mini")
-GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY", None)
+# Get a free API key from https://aistudio.google.com/apikey
+GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
+
+
+@st.cache_resource
+def get_gemini_client():
+    """Create (once) and cache the Gemini client for the app's lifetime."""
+    if not GEMINI_API_KEY:
+        return None
+    return genai.Client(api_key=GEMINI_API_KEY)
 
 # --------------------------------------------------
 # Set up page configuration
@@ -81,10 +92,78 @@ def _username_exists(worksheet, username):
     return username in _get_all_users(worksheet)
 
 
+# ==========================================================
+# GOOGLE SHEETS USER DATA — persists each user's dashboard data
+# (BPM, HRV, steps, history, etc.) so it's the same on any device.
+# Stored as one row per user in a second worksheet:
+#   username | data_json | updated_at
+# ==========================================================
+USERDATA_WORKSHEET_NAME = "UserData"
+
+# Which session_state keys count as "this user's data" and get
+# saved/restored. UI-only state (current page, loader flags, etc.)
+# is intentionally left out.
+PERSIST_KEYS = [
+    "heart_rate", "resting_hr", "hrv", "blood_pressure_variability",
+    "heart_rate_recovery", "sleep_quality", "steps", "battery",
+    "hydration_oz", "streak_days", "logged_symptoms", "meds_state",
+    "patient_name", "patient_age", "selected_watch", "connected_since",
+    "trend_data", "full_history", "activity_feed", "chat_history",
+    "weekly_story",
+]
+
+
+@st.cache_resource
+def get_userdata_worksheet():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=AUTH_SCOPES)
+    client = gspread.authorize(creds)
+    sheet = client.open(AUTH_SHEET_NAME)
+    try:
+        return sheet.worksheet(USERDATA_WORKSHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sheet.add_worksheet(title=USERDATA_WORKSHEET_NAME, rows=1000, cols=3)
+        ws.append_row(["username", "data_json", "updated_at"])
+        return ws
+
+
+def _load_user_data(worksheet, username):
+    """Return the saved dict of session data for this user, or None."""
+    try:
+        cell = worksheet.find(username, in_column=1)
+    except gspread.exceptions.CellNotFound:
+        return None
+    if not cell:
+        return None
+    row = worksheet.row_values(cell.row)
+    if len(row) < 2 or not row[1]:
+        return None
+    try:
+        return json.loads(row[1])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _save_user_data(worksheet, username, data: dict):
+    """Upsert this user's row with their latest data as JSON."""
+    payload = json.dumps(data, default=str)
+    now = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    try:
+        cell = worksheet.find(username, in_column=1)
+    except gspread.exceptions.CellNotFound:
+        cell = None
+    if cell:
+        worksheet.update(f"B{cell.row}:C{cell.row}", [[payload, now]])
+    else:
+        worksheet.append_row([username, payload, now])
+
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "auth_username" not in st.session_state:
     st.session_state.auth_username = None
+if "is_guest" not in st.session_state:
+    st.session_state.is_guest = False
 
 
 def render_login_gate():
@@ -107,6 +186,23 @@ def render_login_gate():
             <div class="pg-login-sub">Sign in to access your heart health dashboard</div>
         </div>
     """.replace("{logo}", LOGO_URL), unsafe_allow_html=True)
+
+    # --------------------------------------------------
+    # Guest mode: skip Google Sheets auth entirely so you can jump
+    # straight into the dashboard without creating an account.
+    # --------------------------------------------------
+    gcol1, gcol2, gcol3 = st.columns([1, 1.3, 1])
+    with gcol2:
+        if st.button("👤 Continue as Guest", use_container_width=True):
+            st.session_state.logged_in = True
+            st.session_state.auth_username = "Guest"
+            st.session_state.is_guest = True
+            st.rerun()
+        st.markdown(
+            "<div style='text-align:center; color:#5c6b7a; font-size:12px; margin:14px 0;'>"
+            "or sign in below to save your data across visits</div>",
+            unsafe_allow_html=True
+        )
 
     try:
         worksheet = get_auth_worksheet()
@@ -161,8 +257,97 @@ def render_login_gate():
     st.stop()
 
 
+if "boot_loader_shown" not in st.session_state:
+    st.session_state.boot_loader_shown = False
+
+if not st.session_state.boot_loader_shown:
+    st.markdown(
+        """
+        <style>
+        @keyframes pulseguardBootFadeOut {
+            from { opacity: 1; visibility: visible; }
+            to { opacity: 0; visibility: hidden; }
+        }
+        #pulseguard-boot-loader {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(7, 18, 26, 0.98);
+            animation: pulseguardBootFadeOut 0.8s ease 5.2s forwards;
+        }
+        .pulseguard-boot-loader-inner {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .pulseguard-boot-loader-logo {
+            width: 64px;
+            height: 64px;
+            border-radius: 18px;
+            box-shadow: 0 24px 60px rgba(0, 229, 255, 0.2);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .pulseguard-boot-loader-text {
+            color: #E6F3FA;
+            font-family: Inter, sans-serif;
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            text-shadow: 0 0 18px rgba(0,229,255,0.15);
+        }
+        .pulseguard-boot-loader-subtext {
+            color: #9fb0c0;
+            font-family: Inter, sans-serif;
+            font-size: 14px;
+            margin-top: 6px;
+        }
+        </style>
+        <div id="pulseguard-boot-loader">
+            <div class="pulseguard-boot-loader-inner">
+                <img src=\""""
+        + LOGO_URL
+        + """\" class="pulseguard-boot-loader-logo" />
+                <div>
+                    <div class="pulseguard-boot-loader-text">Welcome to PulseGuard</div>
+                    <div class="pulseguard-boot-loader-subtext">Your road to a healthier heart starts here</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    st.session_state.boot_loader_shown = True
+
 if not st.session_state.logged_in:
     render_login_gate()
+
+# --------------------------------------------------
+# Restore this user's saved data (BPM, HRV, history, etc.)
+# so it carries over across devices/sessions. Runs once per
+# session, right after login and before any defaults are set,
+# so restored values aren't overwritten by fresh random defaults.
+# Guests don't have an account to save to, so they always start fresh.
+# --------------------------------------------------
+if (
+    st.session_state.logged_in
+    and not st.session_state.is_guest
+    and not st.session_state.get("user_data_loaded")
+):
+    try:
+        _userdata_ws = get_userdata_worksheet()
+        _saved_data = _load_user_data(_userdata_ws, st.session_state.auth_username)
+        if _saved_data:
+            for _k, _v in _saved_data.items():
+                if _k in PERSIST_KEYS:
+                    st.session_state[_k] = _v
+    except Exception:
+        # If the sheet is unreachable, fall back to fresh defaults
+        # rather than blocking the user from using the app.
+        pass
+    st.session_state.user_data_loaded = True
 
 loader_html = """
 <style>
@@ -178,7 +363,7 @@ loader_html = """
     align-items: center;
     justify-content: center;
     background: rgba(7, 18, 26, 0.98);
-    animation: pulseguardFadeOut 0.8s ease 1.5s forwards;
+    animation: pulseguardFadeOut 0.8s ease 4.3s forwards;
 }
 .pulseguard-loader-inner {
     display: flex;
@@ -213,11 +398,14 @@ loader_html = """
         <img src="{{LOGO_URL}}" class="pulseguard-loader-logo" />
         <div>
             <div class="pulseguard-loader-text">PulseGuard</div>
-            <div class="pulseguard-loader-subtext">Loading your heart intelligence...</div>
+            <div class="pulseguard-loader-subtext">{{WELCOME_TEXT}}</div>
         </div>
     </div>
 </div>
-""".replace("{{LOGO_URL}}", LOGO_URL)
+""".replace("{{LOGO_URL}}", LOGO_URL).replace(
+    "{{WELCOME_TEXT}}",
+    f"Welcome, {st.session_state.auth_username}!" if st.session_state.get("auth_username") else "Loading your heart intelligence..."
+)
 
 if "loader_shown" not in st.session_state:
     st.session_state.loader_shown = True
@@ -259,6 +447,9 @@ _defaults = {
     "logged_symptoms": [],
     "meds_state": {"BP Medication": True, "Omega-3": True, "Magnesium": False},
     "patient_name": "",
+    "patient_age": 45,
+    "weekly_story": None,
+    "anomaly_alert_shown": False,
 }
 
 for _key, _val in _defaults.items():
@@ -367,7 +558,9 @@ def get_ai_system_prompt():
         "You are PulseGuard AI Assistant, a knowledgeable and empathetic health companion. "
         "Use only the available data from the user's current vitals and wearable telemetry. "
         "Provide clear, actionable guidance, but do not provide a medical diagnosis. "
-        "Always remind the user that this is informational and that a clinician should confirm any clinical decisions."
+        "Always remind the user that this is informational and that a clinician should confirm any clinical decisions. "
+        "This is an ongoing conversation — do not re-introduce yourself or say hello again after the first message. "
+        "Give complete answers; don't trail off mid-thought."
     )
 
 def build_ai_context():
@@ -402,45 +595,60 @@ def build_ai_context():
         + "\n".join(trend_summary)
     )
 
-def get_ai_response(user_question):
+def get_ai_response(user_question, chat_history=None):
     system_prompt = get_ai_system_prompt()
     context = build_ai_context()
-    if not GEMINI_API_KEY:
+
+    client = get_gemini_client()
+    if client is None:
         return (
-            "Gemini is not configured. Please set GOOGLE_API_KEY in your environment "
+            "Gemini is not configured. Please set GEMINI_API_KEY in your environment "
             "or Streamlit secrets to enable the Gemini Assistant."
         )
 
-    prompt = (
-        f"{system_prompt}\n\n{context}\n\nUser question: {user_question}\nAssistant:")
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta2/models/{GEMINI_MODEL}:generateText?key={GEMINI_API_KEY}"
+    # Build multi-turn contents so Gemini remembers the conversation instead
+    # of treating every message as the first one.
+    contents = []
+    if chat_history:
+        for role, content in chat_history:
+            gemini_role = "user" if role == "user" else "model"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+
+    # Attach the live telemetry context to the latest user turn so it always
+    # has current numbers without repeating the full dump every message.
+    contents.append(
+        {"role": "user", "parts": [{"text": f"{context}\n\nUser question: {user_question}"}]}
     )
-    body = {
-        "prompt": {"text": prompt},
+
+    base_config = {
+        "system_instruction": system_prompt,
         "temperature": 0.7,
-        "maxOutputTokens": 512,
+        "max_output_tokens": 2048,
     }
 
     try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=60) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        if "candidates" in data and data["candidates"]:
-            return data["candidates"][0].get("output", "").strip()
-        return "Gemini returned no response."
-    except urllib.error.HTTPError as exc:
+        # Not every Gemini model version accepts thinking_config, so try with
+        # it first (saves tokens for the visible answer) and fall back
+        # cleanly to a plain request if the model rejects the field.
         try:
-            error_body = exc.read().decode("utf-8")
-            error_json = json.loads(error_body)
-            message = error_json.get("error", {}).get("message", error_body)
-        except Exception:
-            message = exc.reason
-        return f"Gemini API request failed: {message}"
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config={**base_config, "thinking_config": {"thinking_budget": 0}},
+            )
+        except genai_errors.APIError as thinking_exc:
+            if "INVALID_ARGUMENT" in str(thinking_exc) or getattr(thinking_exc, "code", None) == 400:
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config=base_config,
+                )
+            else:
+                raise
+        text = (response.text or "").strip()
+        return text if text else "Gemini returned no response."
+    except genai_errors.APIError as exc:
+        return f"Gemini API request failed: {exc.message if hasattr(exc, 'message') else exc}"
     except Exception as exc:
         return f"Gemini request failed: {exc}"
 
@@ -541,8 +749,8 @@ div[data-testid="column"] button[key^="nav_"] p {
 
 .glass-card {
     background: linear-gradient(180deg, rgba(8,18,30,0.64), rgba(10,20,34,0.56)) !important;
-    backdrop-filter: blur(14px) saturate(140%) !important;
-    -webkit-backdrop-filter: blur(14px) saturate(140%) !important;
+    backdrop-filter: blur(8px) saturate(120%) !important;
+    -webkit-backdrop-filter: blur(8px) saturate(120%) !important;
     border: 1px solid rgba(255, 255, 255, 0.04) !important;
     border-radius: 18px !important;
     padding: 22px !important;
@@ -837,18 +1045,44 @@ div[data-baseweb="select"] input {
     background-color: transparent !important;
 }
 
+/* Chat input widget — Streamlit/BaseWeb wrap the textbox in several
+   nested divs. Earlier we only styled two of those layers, which left
+   an outer layer showing its default light-theme border/box-shadow as
+   a white edge around the box. Reset every layer to transparent first,
+   then explicitly re-apply the dark background only on the actual
+   textbox wrapper (a more specific selector, so it still wins). */
+div[data-testid="stChatInput"] *,
+.stChatInput * {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+div[data-testid="stChatInput"] div[data-baseweb="textarea"],
+div[data-testid="stChatInput"] div[data-baseweb="input"],
+div[data-testid="stChatInput"] div[data-baseweb="base-input"],
+.stChatInput div[data-baseweb="textarea"],
+.stChatInput div[data-baseweb="input"],
+.stChatInput div[data-baseweb="base-input"] {
+    background-color: rgba(13, 23, 40, 0.85) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 10px !important;
+}
+
 div[data-testid="stChatInput"] input,
 div[data-testid="stChatInput"] textarea,
-div[data-testid="stChatInput"] div[data-baseweb="input"] > div,
-div[data-testid="stChatInput"] div[data-baseweb="textarea"] > div,
 .stChatInput input,
-.stChatInput textarea,
-.stChatInput div[data-baseweb="input"] > div,
-.stChatInput div[data-baseweb="textarea"] > div {
-    background-color: rgba(13, 23, 40, 0.75) !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+.stChatInput textarea {
+    background-color: transparent !important;
+    border: none !important;
     color: #E6F3FA !important;
-    border-radius: 10px !important;
+}
+
+div[data-testid="stChatInput"] div[data-baseweb="textarea"]:focus-within,
+div[data-testid="stChatInput"] div[data-baseweb="input"]:focus-within {
+    outline: none !important;
+    box-shadow: none !important;
+    border-color: rgba(0, 229, 255, 0.4) !important;
 }
 
 div[data-testid="stChatInput"] input::placeholder,
@@ -856,6 +1090,29 @@ div[data-testid="stChatInput"] textarea::placeholder,
 .stChatInput input::placeholder,
 .stChatInput textarea::placeholder {
     color: rgba(230,243,250,0.55) !important;
+}
+
+/* The fixed footer bar that st.chat_input renders into defaults to
+   Streamlit's light theme background, which shows up as a white strip
+   (and white edge around the box itself) at the bottom of the AI
+   Assistant tab. Force every wrapper level to match the app's dark
+   background, and strip any default border/shadow on the footer. */
+div[data-testid="stBottom"],
+div[data-testid="stBottom"] *,
+div[data-testid="stBottomBlockContainer"],
+div[data-testid="stBottomBlockContainer"] *,
+div[data-testid="stChatInputContainer"],
+div[data-testid="stChatInputContainer"] *,
+.stChatFloatingInputContainer,
+.stChatFloatingInputContainer * {
+    background: #07121a !important;
+    background-color: #07121a !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+div[data-testid="stBottom"] {
+    border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
 
 /* Universal Streamlit Download Button Override */
@@ -1212,6 +1469,7 @@ def render_heart_structure_reference():
 
 def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, heart_rate_recovery=27):
     MODEL_URL = "https://cdn.jsdelivr.net/gh/FreddieSawiras/NJHDP-PulseGaurd@main/assets/scene.gltf"
+    MODEL_URL_FALLBACK = "https://raw.githubusercontent.com/FreddieSawiras/NJHDP-PulseGaurd/main/assets/scene.gltf"
 
     # Pull live status/color for the data-tied hotspots so hovering them
     # reflects the person's actual current readings, not generic text.
@@ -1295,9 +1553,9 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
             const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
             camera.position.set(0, 0.3, 7.5);
 
-            const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
+            const renderer = new THREE.WebGLRenderer({{ antialias: false, alpha: true }});
             renderer.setSize(container.clientWidth, container.clientHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
             container.appendChild(renderer.domElement);
 
             const controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -1389,10 +1647,9 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
                 }});
                 geo.center();
                 geo.computeVertexNormals();
-                const mat = new THREE.MeshPhysicalMaterial({{
-                    color: 0xb5121b, roughness: 0.35, metalness: 0.05,
-                    clearcoat: 0.6, clearcoatRoughness: 0.3, sheen: 1.0,
-                    sheenColor: new THREE.Color(0xff4d6d), emissive: 0x2a0508, emissiveIntensity: 0.4
+                const mat = new THREE.MeshStandardMaterial({{
+                    color: 0xb5121b, roughness: 0.35, metalness: 0.15,
+                    emissive: 0x2a0508, emissiveIntensity: 0.4
                 }});
                 const mesh = new THREE.Mesh(geo, mat);
                 mesh.rotation.x = Math.PI;
@@ -1405,39 +1662,50 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
             }}
 
             const loader = new THREE.GLTFLoader();
+
+            function onModelLoaded(gltf) {{
+                const model = gltf.scene;
+                const rawBox = new THREE.Box3().setFromObject(model);
+                const center = rawBox.getCenter(new THREE.Vector3());
+                const size = rawBox.getSize(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z) || 1;
+                const scale = 3.4 / maxDim;
+
+                model.position.sub(center);
+                model.scale.setScalar(scale);
+
+                model.traverse((child) => {{
+                    if (child.isMesh) {{
+                        if (child.material) {{
+                            child.material.metalness = Math.min(child.material.metalness ?? 0.1, 0.2);
+                            child.material.roughness = Math.max(child.material.roughness ?? 0.4, 0.35);
+                        }}
+                    }}
+                }});
+
+                heartGroup.add(model);
+                modelMesh = model;
+
+                const fittedBox = new THREE.Box3().setFromObject(model);
+                addHotspots(fittedBox);
+                finishLoading();
+            }}
+
             loader.load(
                 "{MODEL_URL}",
-                function (gltf) {{
-                    const model = gltf.scene;
-                    const rawBox = new THREE.Box3().setFromObject(model);
-                    const center = rawBox.getCenter(new THREE.Vector3());
-                    const size = rawBox.getSize(new THREE.Vector3());
-                    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-                    const scale = 3.4 / maxDim;
-
-                    model.position.sub(center);
-                    model.scale.setScalar(scale);
-
-                    model.traverse((child) => {{
-                        if (child.isMesh) {{
-                            if (child.material) {{
-                                child.material.metalness = Math.min(child.material.metalness ?? 0.1, 0.2);
-                                child.material.roughness = Math.max(child.material.roughness ?? 0.4, 0.35);
-                            }}
-                        }}
-                    }});
-
-                    heartGroup.add(model);
-                    modelMesh = model;
-
-                    const fittedBox = new THREE.Box3().setFromObject(model);
-                    addHotspots(fittedBox);
-                    finishLoading();
-                }},
+                onModelLoaded,
                 undefined,
-                function (error) {{
-                    console.warn("Could not load heart.glb, using fallback shape:", error);
-                    buildFallbackHeart();
+                function (primaryError) {{
+                    console.warn("Could not load heart model from primary host, trying fallback host:", primaryError);
+                    loader.load(
+                        "{MODEL_URL_FALLBACK}",
+                        onModelLoaded,
+                        undefined,
+                        function (fallbackError) {{
+                            console.warn("Could not load heart model from fallback host either, using stylized shape:", fallbackError);
+                            buildFallbackHeart();
+                        }}
+                    );
                 }}
             );
 
@@ -1467,8 +1735,8 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
                 }}
             }}
 
-            window.addEventListener('mousemove', (e) => updatePointer(e.clientX, e.clientY));
-            window.addEventListener('touchmove', (e) => {{
+            container.addEventListener('mousemove', (e) => updatePointer(e.clientX, e.clientY));
+            container.addEventListener('touchmove', (e) => {{
                 if (e.touches.length > 0) updatePointer(e.touches[0].clientX, e.touches[0].clientY);
             }}, {{ passive: true }});
 
@@ -1579,13 +1847,13 @@ def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
     score = max(0, min(100, score))
     return score, positives, concerns
 
-def get_score_trend(days=7):
-    """Recompute the health score for each of the last `days` days from
-    full_history, for the trend sparkline."""
-    dates = sorted(st.session_state.full_history.keys())[-days:]
+@st.cache_data(show_spinner=False)
+def _get_score_trend_cached(history_snapshot, live_vitals, days):
+    history = {date_key: dict(day_items) for date_key, day_items in history_snapshot}
+    dates = sorted(history.keys())[-days:]
     trend = []
     for d in dates:
-        day = st.session_state.full_history[d]
+        day = history[d]
         day_score, _, _ = generate_health_summary(
             heart_rate=day["heart_rate"],
             resting_hr=day["resting_hr"],
@@ -1598,6 +1866,12 @@ def get_score_trend(days=7):
         trend.append(day_score)
     trend.append(generate_health_summary()[0])  # today
     return trend
+
+
+def get_score_trend(days=7):
+    """Recompute the health score for each of the last `days` days from
+    full_history, for the trend sparkline."""
+    return _get_score_trend_cached(_history_snapshot(), _live_vitals_key(), days)
 
 def get_biggest_driver():
     """Return (label, is_concern) for whichever tracked metric is furthest
@@ -1663,6 +1937,295 @@ def generate_ai_insight(score, positives, concerns):
         "and should be confirmed by a clinician with appropriate testing before any treatment decision."
     )
     return "Based on today's readings, " + tone + body + closing
+
+
+# =====================================================
+# AI INSIGHTS HELPERS (Weekly Story, Correlations,
+# Heart Age / Trajectory, Anomaly Detection)
+# =====================================================
+
+def _history_snapshot():
+    """Hashable snapshot of full_history, used as a cache key so cached
+    functions below only recompute when the underlying data actually
+    changes — not on every Streamlit rerun (tab switch, unrelated click)."""
+    return tuple(sorted(
+        (date_key, tuple(sorted(day.items())))
+        for date_key, day in st.session_state.full_history.items()
+    ))
+
+
+def _live_vitals_key():
+    """Hashable snapshot of today's live slider values, used alongside
+    _history_snapshot() as a cache key for anything that also factors in
+    today's current readings (heart age, score trend/projection)."""
+    return (
+        st.session_state.heart_rate,
+        st.session_state.resting_hr,
+        st.session_state.hrv,
+        st.session_state.sleep_quality,
+        st.session_state.steps,
+        st.session_state.heart_rate_recovery,
+        st.session_state.blood_pressure_variability,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _history_dataframe_cached(history_snapshot):
+    rows = []
+    for date_key, day_items in history_snapshot:
+        row = dict(day_items)
+        row["date"] = date_key
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _history_dataframe():
+    """Full telemetry history as a DataFrame, sorted by date, for stats work."""
+    return _history_dataframe_cached(_history_snapshot())
+
+
+def get_weekly_story():
+    """Ask Gemini for a short narrative summary of the last 7 days. Cached
+    in session_state so it's only regenerated when the user asks for it."""
+    client = get_gemini_client()
+    if client is None:
+        return "Gemini is not configured, so the weekly story can't be generated right now."
+
+    trend_days = sorted(st.session_state.full_history.keys())[-7:]
+    lines = []
+    for d in trend_days:
+        day = st.session_state.full_history[d]
+        lines.append(
+            f"{d}: HR {day['heart_rate']} BPM, RHR {day['resting_hr']} BPM, HRV {day['hrv']} ms, "
+            f"Sleep {day['sleep_quality']}%, Steps {day['steps']}"
+        )
+    prompt = (
+        "Here is one user's last 7 days of wearable heart telemetry:\n" + "\n".join(lines) +
+        "\n\nWrite a short (4-6 sentence) plain-language 'weekly story' that highlights the most "
+        "notable pattern or change across the week (e.g. a dip tied to poor sleep, a recovery, a steady "
+        "trend). Reference only the numbers given above. Be warm but not alarmist, and end with a brief "
+        "reminder that this is informational, not a diagnosis. Keep the whole thing under 90 words so "
+        "it comfortably finishes within the response budget — never cut a sentence off partway through."
+    )
+    try:
+        # Thinking models spend part of max_output_tokens on invisible
+        # reasoning before writing the visible answer, which is what was
+        # cutting this off mid-sentence — turn thinking off (with a
+        # fallback for model versions that reject the field) the same
+        # way get_ai_response() already does.
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.7, "max_output_tokens": 3000, "thinking_config": {"thinking_budget": 0}},
+            )
+        except genai_errors.APIError as thinking_exc:
+            if "INVALID_ARGUMENT" in str(thinking_exc) or getattr(thinking_exc, "code", None) == 400:
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config={"temperature": 0.7, "max_output_tokens": 3000},
+                )
+            else:
+                raise
+        return (response.text or "").strip() or "Gemini returned no response."
+    except Exception as exc:
+        return f"Couldn't generate your weekly story right now: {exc}"
+
+
+@st.cache_data(show_spinner=False)
+def _compute_correlations_cached(history_snapshot, min_abs_corr):
+    """Compute Pearson correlations between metric pairs across full_history
+    and return the most notable ones as plain-language findings."""
+    df = _history_dataframe_cached(history_snapshot)
+    metrics = {
+        "heart_rate": "Heart rate",
+        "resting_hr": "Resting heart rate",
+        "hrv": "HRV",
+        "sleep_quality": "Sleep quality",
+        "steps": "Daily steps",
+        "heart_rate_recovery": "Heart rate recovery",
+        "blood_pressure_variability": "Blood pressure variability",
+    }
+    if len(df) < 5:
+        return []
+
+    corr_matrix = df[list(metrics.keys())].corr(numeric_only=True)
+    findings = []
+    seen_pairs = set()
+    keys = list(metrics.keys())
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            pair = tuple(sorted((a, b)))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            r = corr_matrix.loc[a, b]
+            if pd.isna(r) or abs(r) < min_abs_corr:
+                continue
+            direction = "rise together" if r > 0 else "move in opposite directions"
+            findings.append({
+                "metric_a": metrics[a],
+                "metric_b": metrics[b],
+                "r": round(float(r), 2),
+                "direction": direction,
+            })
+    findings.sort(key=lambda f: abs(f["r"]), reverse=True)
+    return findings[:4]
+
+
+def compute_correlations(min_abs_corr=0.3):
+    return _compute_correlations_cached(_history_snapshot(), min_abs_corr)
+
+
+def get_correlation_insight(findings):
+    """Turn computed correlation numbers into plain-language sentences via
+    Gemini, constrained to only the numbers we actually computed."""
+    if not findings:
+        return "Not enough history yet to detect reliable correlations — check back after a few more days of data."
+
+    client = get_gemini_client()
+    facts = "\n".join(
+        f"- {f['metric_a']} and {f['metric_b']}: r = {f['r']} ({f['direction']})" for f in findings
+    )
+    if client is None:
+        return "Here's what the numbers show (Gemini isn't configured to add narration):\n" + facts
+
+    prompt = (
+        "These are real, already-computed Pearson correlations from a user's health telemetry history. "
+        "Do not invent or restate different numbers — only explain the ones given, in plain language, "
+        "one short sentence per line:\n" + facts +
+        "\n\nFor context, |r| above 0.7 is a strong relationship, 0.4-0.7 is moderate, 0.3-0.4 is weak. "
+        "Keep it to 1 short sentence per correlation, no preamble, and make sure every sentence you "
+        "start is finished — never cut one off partway through."
+    )
+    try:
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.4, "max_output_tokens": 2500, "thinking_config": {"thinking_budget": 0}},
+            )
+        except genai_errors.APIError as thinking_exc:
+            if "INVALID_ARGUMENT" in str(thinking_exc) or getattr(thinking_exc, "code", None) == 400:
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config={"temperature": 0.4, "max_output_tokens": 2500},
+                )
+            else:
+                raise
+        return (response.text or "").strip() or facts
+    except Exception:
+        return "Here's what the numbers show:\n" + facts
+
+
+@st.cache_data(show_spinner=False)
+def _compute_heart_age_cached(age, live_vitals, score):
+    """Heuristic 'heart age' estimate: a healthier score shifts the estimate
+    younger than the person's stated age, a lower score shifts it older.
+    This is a simplified, non-clinical illustration, not a validated model."""
+    offset = (score - 75) / 3.0  # each ~3 points above/below 75 shifts a year
+    heart_age = age - offset
+    heart_age = max(18, round(heart_age))
+    return heart_age, score
+
+
+def compute_heart_age(age):
+    score, _, _ = generate_health_summary()
+    return _compute_heart_age_cached(age, _live_vitals_key(), score)
+
+
+@st.cache_data(show_spinner=False)
+def _compute_score_projection_cached(history_snapshot, live_vitals, days_ahead):
+    """Fit a simple linear trend to the last 30 days of health scores and
+    project it forward. Returns (current_score, projected_score, slope_per_day)."""
+    scores = _get_score_trend_cached(history_snapshot, live_vitals, 30)
+    if len(scores) < 5:
+        return scores[-1] if scores else 0, scores[-1] if scores else 0, 0.0
+    x = list(range(len(scores)))
+    slope, intercept = np.polyfit(x, scores, 1)
+    projected_x = len(scores) - 1 + days_ahead
+    projected = slope * projected_x + intercept
+    projected = max(0, min(100, round(projected)))
+    return scores[-1], projected, round(slope, 3)
+
+
+def compute_score_projection(days_ahead=30):
+    return _compute_score_projection_cached(_history_snapshot(), _live_vitals_key(), days_ahead)
+
+
+def detect_anomalies(z_threshold=2.0):
+    """Compare today's live slider values against the person's own 30-day
+    baseline (mean/std) and flag anything that's a real outlier for them,
+    rather than a generic fixed threshold."""
+    df = _history_dataframe()
+    if len(df) < 7:
+        return []
+
+    live_values = {
+        "heart_rate": st.session_state.heart_rate,
+        "resting_hr": st.session_state.resting_hr,
+        "hrv": st.session_state.hrv,
+        "sleep_quality": st.session_state.sleep_quality,
+        "heart_rate_recovery": st.session_state.heart_rate_recovery,
+        "blood_pressure_variability": st.session_state.blood_pressure_variability,
+    }
+    labels = {
+        "heart_rate": "Heart rate",
+        "resting_hr": "Resting heart rate",
+        "hrv": "HRV",
+        "sleep_quality": "Sleep quality",
+        "heart_rate_recovery": "Heart rate recovery",
+        "blood_pressure_variability": "Blood pressure variability",
+    }
+    anomalies = []
+    for key, live_val in live_values.items():
+        series = df[key]
+        mean, std = series.mean(), series.std()
+        if not std or pd.isna(std):
+            continue
+        z = (live_val - mean) / std
+        if abs(z) >= z_threshold:
+            anomalies.append({
+                "metric": labels[key],
+                "value": live_val,
+                "baseline": round(mean, 1),
+                "z": round(float(z), 2),
+                "direction": "higher" if z > 0 else "lower",
+            })
+    return anomalies
+
+
+def get_anomaly_alert_message(anomalies):
+    """Phrase detected anomalies as a caring, plain-language heads-up,
+    strictly using the computed values (no invented numbers)."""
+    if not anomalies:
+        return None
+    facts = "\n".join(
+        f"- {a['metric']}: currently {a['value']}, which is {a['direction']} than this person's own "
+        f"typical baseline of {a['baseline']} (z-score {a['z']})" for a in anomalies
+    )
+    client = get_gemini_client()
+    if client is None:
+        return "Heads up — a couple of readings look off from your usual baseline:\n" + facts
+
+    prompt = (
+        "A wearable health app detected that these readings are unusual compared to this specific "
+        "person's own historical baseline (not a generic medical threshold):\n" + facts +
+        "\n\nWrite a brief (2-3 sentence), calm, non-alarmist heads-up message as the PulseGuard AI "
+        "Assistant would say it at the start of a chat. Don't diagnose. Suggest they keep an eye on it "
+        "and mention a clinician if it persists."
+    )
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config={"temperature": 0.6, "max_output_tokens": 300},
+        )
+        return (response.text or "").strip() or ("Heads up — a couple of readings look off from your usual baseline:\n" + facts)
+    except Exception:
+        return "Heads up — a couple of readings look off from your usual baseline:\n" + facts
 
 
 def build_report_window(period_key, custom_start=None, custom_end=None):
@@ -1742,6 +2305,185 @@ def summarize_report_rows(rows):
         "max_steps": max(metrics["steps"]),
         "min_steps": min(metrics["steps"]),
     }
+
+
+# ==========================================================
+# SHAREABLE STORY CARD — a vertical PNG (Instagram-story shaped)
+# with the person's heart score, styled to match the app so it
+# looks good posted straight to a story or feed.
+# ==========================================================
+def _story_font(size, bold=False):
+    """Best-effort font loader — tries a few common bundled TrueType
+    fonts, then falls back to Pillow's own built-in font. Pillow's
+    load_default() *without* a size argument always renders as a tiny
+    fixed ~10px bitmap regardless of the requested size — that's what
+    was making every label look like a dot. Passing size= (supported
+    since Pillow 10.1) gives a scalable version of that same built-in
+    font, so text is always legible even on a server with zero of the
+    TrueType font files below actually installed."""
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    # matplotlib bundles DejaVu Sans internally and is present in most
+    # data-science environments even when not imported directly — worth
+    # a shot before falling back to Pillow's built-in font.
+    try:
+        import matplotlib
+        mpl_font = os.path.join(
+            matplotlib.get_data_path(), "fonts", "ttf",
+            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+        )
+        if os.path.exists(mpl_font):
+            return ImageFont.truetype(mpl_font, size)
+    except Exception:
+        pass
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        # Ancient Pillow without size-aware load_default — better a
+        # readable-if-imperfect font than a silent crash.
+        return ImageFont.load_default()
+
+
+def _lerp_color(c1, c2, t):
+    return tuple(round(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
+
+def _draw_centered_text(draw, xy, text, font, fill):
+    x, y = xy
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w = bbox[2] - bbox[0]
+    h = bbox[3] - bbox[1]
+    draw.text((x - w / 2, y - h / 2 - bbox[1]), text, font=font, fill=fill)
+
+
+def _rounded_rect_alpha(size, radius, fill):
+    """A rounded rectangle on its own transparent layer, so it can be
+    alpha-composited onto the background for a soft glass-card look."""
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle([0, 0, size[0], size[1]], radius=radius, fill=fill)
+    return layer
+
+
+def _draw_heart_icon(draw, cx, cy_visual_center, size, fill):
+    """Draw a filled heart as actual shapes (two lobes + a point) instead
+    of the U+2665 text glyph — the PNG export's fallback font doesn't
+    include that glyph and was rendering it as a missing-character box."""
+    r = size * 0.28
+    top = cy_visual_center - r * 1.55
+    draw.ellipse([cx - 2 * r, top, cx, top + 2 * r], fill=fill)
+    draw.ellipse([cx, top, cx + 2 * r, top + 2 * r], fill=fill)
+    draw.polygon(
+        [(cx - 2 * r, top + r * 1.1), (cx + 2 * r, top + r * 1.1), (cx, top + r * 3.2)],
+        fill=fill
+    )
+
+
+def generate_share_card(score, resting_hr, hrv, sleep_quality, streak_days,
+                         patient_name="", trend_word="steady"):
+    """Build a 1080x1920 (Instagram-story-shaped) PNG summarizing the
+    person's heart score and a few headline stats, in PulseGuard's
+    cyan/purple dark theme. Returns raw PNG bytes."""
+    W, H = 1080, 1920
+    CYAN = (0, 229, 255)
+    PURPLE = (124, 92, 255)
+    BG_TOP = (10, 18, 32)
+    BG_BOTTOM = (5, 10, 20)
+    TEXT = (230, 243, 250)
+    MUTED = (138, 153, 173)
+
+    # Vertical gradient background
+    bg = Image.new("RGB", (W, H))
+    grad = np.linspace(0, 1, H)[:, None]
+    top = np.array(BG_TOP)
+    bottom = np.array(BG_BOTTOM)
+    rows = (top + (bottom - top) * grad).astype(np.uint8)
+    bg_arr = np.repeat(rows[:, None, :], W, axis=1)
+    bg = Image.fromarray(bg_arr, "RGB").convert("RGBA")
+
+    # Soft glow blobs behind the ring, echoing the app's radial accents
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow)
+    glow_draw.ellipse([W * 0.5 - 420, 560, W * 0.5 + 420, 1400], fill=(0, 229, 255, 40))
+    glow_draw.ellipse([W * 0.5 - 300, 620, W * 0.5 + 300, 1340], fill=(124, 92, 255, 35))
+    glow = glow.filter(ImageFilter.GaussianBlur(120))
+    bg = Image.alpha_composite(bg, glow)
+
+    draw = ImageDraw.Draw(bg)
+
+    # Header wordmark
+    draw.ellipse([W / 2 - 34, 96, W / 2 + 34, 164], fill=(0, 229, 255, 255))
+    _draw_heart_icon(draw, W / 2, 130, 60, (5, 16, 32))
+    _draw_centered_text(draw, (W / 2, 220), "PulseGuard", _story_font(56, bold=True), TEXT)
+    _draw_centered_text(draw, (W / 2, 270), "HEART HEALTH INTELLIGENCE", _story_font(22, bold=True), MUTED)
+
+    # Score ring — segmented arc, colour interpolated cyan -> purple so
+    # it reads as a smooth gradient stroke despite PIL not supporting
+    # gradient strokes natively.
+    ring_cx, ring_cy, ring_r = W / 2, 980, 300
+    thickness = 34
+    bbox = [ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r]
+    draw.arc(bbox, start=-90, end=270, fill=(255, 255, 255, 30), width=thickness)
+
+    sweep = max(1, round(360 * (score / 100)))
+    steps = max(sweep, 1)
+    for i in range(steps):
+        a0 = -90 + i
+        a1 = a0 + 1.2
+        t = i / max(steps - 1, 1)
+        color = _lerp_color(CYAN, PURPLE, t)
+        draw.arc(bbox, start=a0, end=a1, fill=color + (255,), width=thickness)
+
+    _draw_centered_text(draw, (ring_cx, ring_cy - 30), str(score), _story_font(150, bold=True), (255, 255, 255))
+    _draw_centered_text(draw, (ring_cx, ring_cy + 70), "/ 100", _story_font(40, bold=True), MUTED)
+    _draw_centered_text(draw, (ring_cx, ring_cy + 150), "HEART SCORE", _story_font(28, bold=True), CYAN)
+
+    if patient_name:
+        _draw_centered_text(draw, (ring_cx, ring_cy + 210), f"{patient_name}'s cardiovascular snapshot", _story_font(24), MUTED)
+
+    trend_labels = {
+        "improving": ("Trending up this month", (0, 229, 255)),
+        "declining": ("Keep an eye on this month", (255, 77, 109)),
+        "steady": ("Holding steady this month", (255, 183, 3)),
+    }
+    trend_text, trend_color = trend_labels.get(trend_word, trend_labels["steady"])
+    _draw_centered_text(draw, (ring_cx, ring_cy + ring_r + 55), trend_text, _story_font(26, bold=True), trend_color)
+
+    # Stat chips
+    stats = [
+        ("RESTING HR", f"{resting_hr} bpm"),
+        ("HRV", f"{hrv} ms"),
+        ("SLEEP", f"{sleep_quality}%"),
+        ("STREAK", f"{streak_days}d"),
+    ]
+    chip_w, chip_h, gap = 228, 150, 24
+    total_w = chip_w * 4 + gap * 3
+    start_x = (W - total_w) / 2
+    chip_y = 1420
+    bg_rgba = bg
+    for i, (label, value) in enumerate(stats):
+        cx0 = start_x + i * (chip_w + gap)
+        card = _rounded_rect_alpha((chip_w, chip_h), 22, (255, 255, 255, 18))
+        bg_rgba.alpha_composite(card, (round(cx0), chip_y))
+        draw = ImageDraw.Draw(bg_rgba)
+        _draw_centered_text(draw, (cx0 + chip_w / 2, chip_y + 50), value, _story_font(34, bold=True), (255, 255, 255))
+        _draw_centered_text(draw, (cx0 + chip_w / 2, chip_y + 105), label, _story_font(18, bold=True), MUTED)
+
+    # Footer
+    draw = ImageDraw.Draw(bg_rgba)
+    _draw_centered_text(draw, (W / 2, 1720), "Track your own heart health with PulseGuard", _story_font(26, bold=True), TEXT)
+    _draw_centered_text(draw, (W / 2, 1760), "Informational only - not a medical diagnosis", _story_font(20), MUTED)
+
+    out = io.BytesIO()
+    bg_rgba.convert("RGB").save(out, format="PNG")
+    return out.getvalue()
 
 
 def generate_doctor_report_pdf(rows, period_label, patient_name=""):
@@ -1971,7 +2713,7 @@ NAV_ITEMS = [
     "⌚ Smartwatch",
     "📈 Health Summary",
     "🤖 AI Assistant",
-    "💡 Accuracy Tips",
+    "🧠 AI Insights",
     "ℹ️ About"
 ]
 
@@ -1983,6 +2725,98 @@ if "heart_dashboard_tab" not in st.session_state:
 
 if "health_summary_scroll_target" not in st.session_state:
     st.session_state.health_summary_scroll_target = None
+
+page = st.session_state.current_page
+
+# --------------------------------------------------
+# Live Data Sliders — instantiated BEFORE the nav bar / logout button below.
+# Those buttons can call st.rerun() mid-script; if these sliders were defined
+# AFTER them, a run that ends early via st.rerun() (before ever reaching the
+# sliders) appears to Streamlit as "these widgets weren't on this run," which
+# was clearing their session_state value back to default every time you
+# switched tabs. Defining them first guarantees they're always instantiated
+# before any rerun can fire, so their value never gets treated as stale.
+# --------------------------------------------------
+_devctrl_col, _devctrl_spacer, _boot_logout_col = st.columns([3.4, 6.6, 1.5])
+with _boot_logout_col:
+    if st.button(f"🔓 Log out ({st.session_state.auth_username})", use_container_width=True, key="logout_top"):
+        st.session_state.logged_in = False
+        st.session_state.auth_username = None
+        st.session_state.is_guest = False
+        # Clear the "already loaded" flag and the actual data values so
+        # the next login (even in this same browser tab/session) always
+        # re-fetches fresh data from the sheet instead of reusing whatever
+        # happens to still be sitting in session_state — otherwise a
+        # second account logging in on the same tab could briefly see
+        # the previous account's leftover data, or fall back to defaults.
+        st.session_state.user_data_loaded = False
+        for _k in PERSIST_KEYS:
+            st.session_state.pop(_k, None)
+        st.rerun()
+
+with _devctrl_col:
+    _devctrl_expander = st.expander("⚙️ Device & Controls", expanded=False)
+with _devctrl_expander:
+    st.caption("Customize live parameters or test automated simulation profiles.")
+    device_col, action_col = st.columns([2, 1])
+    with device_col:
+        st.subheader("⌚ Select Wearable Interface")
+        st.session_state.selected_watch = st.selectbox(
+            "Simulated device",
+            list(WATCH_OPTIONS.keys()),
+            index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
+        )
+        watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
+    with action_col:
+        st.subheader("🎲 Controls")
+
+        def _simulate_new_reading():
+            st.session_state.heart_rate = random.randint(55, 130)
+            st.session_state.resting_hr = random.randint(45, 90)
+            st.session_state.hrv = random.randint(15, 90)
+            st.session_state.blood_pressure_variability = random.randint(0, 20)
+            st.session_state.heart_rate_recovery = random.randint(5, 40)
+            st.session_state.sleep_quality = random.randint(30, 100)
+            st.session_state.steps = random.randint(500, 15000)
+            st.session_state.battery = random.randint(10, 100)
+
+        st.button("🎲 Simulate New Reading", use_container_width=True, on_click=_simulate_new_reading)
+
+        st.session_state.autoplay = st.checkbox(
+            "▶️ Auto-Play Demo Scenarios",
+            value=st.session_state.autoplay
+        )
+
+    st.markdown("---")
+
+    # Apply any externally-set reading (e.g. from the camera scan) now,
+    # before the sliders below are instantiated.
+    if st.session_state.get("pending_camera_bpm") is not None:
+        st.session_state.heart_rate = st.session_state.pending_camera_bpm
+        st.session_state.pending_camera_bpm = None
+
+    slider_row1 = st.columns(4)
+    with slider_row1[0]:
+        heart_rate = st.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
+    with slider_row1[1]:
+        resting_hr = st.slider("💓 Resting HR (BPM)", 30, 130, key="resting_hr")
+    with slider_row1[2]:
+        hrv = st.slider("📊 HRV (ms)", 0, 150, key="hrv")
+    with slider_row1[3]:
+        blood_pressure_variability = st.slider("🩺 BP Var (mmHg)", 0, 40, key="blood_pressure_variability")
+
+    slider_row2 = st.columns(4)
+    with slider_row2[0]:
+        heart_rate_recovery = st.slider("🏃 Recovery (BPM)", 0, 60, key="heart_rate_recovery")
+    with slider_row2[1]:
+        sleep_quality = st.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
+    with slider_row2[2]:
+        steps = st.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
+    with slider_row2[3]:
+        battery = st.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
+
+watch_connected = True
+last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
 
 # Application Layout Header
 st.markdown(
@@ -2018,74 +2852,7 @@ for _col, _item in zip(_nav_cols, NAV_ITEMS):
             st.session_state.current_page = _item
             st.rerun()
 
-_top_spacer_col, _logout_col = st.columns([10, 1.3])
-with _logout_col:
-    if st.button(f"🔓 Log out ({st.session_state.auth_username})", use_container_width=True):
-        st.session_state.logged_in = False
-        st.session_state.auth_username = None
-        st.rerun()
-
 st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
-
-page = st.session_state.current_page
-
-# --------------------------------------------------
-# Device & Live Data Controls
-# --------------------------------------------------
-with st.expander("⚙️ Device & Live Data Controls", expanded=False):
-    st.caption("Customize live parameters or test automated simulation profiles.")
-    device_col, action_col = st.columns([2, 1])
-    with device_col:
-        st.subheader("⌚ Select Wearable Interface")
-        st.session_state.selected_watch = st.selectbox(
-            "Simulated device",
-            list(WATCH_OPTIONS.keys()),
-            index=list(WATCH_OPTIONS.keys()).index(st.session_state.selected_watch)
-        )
-        watch_plain_name = " ".join(st.session_state.selected_watch.split(" ")[1:])
-    with action_col:
-        st.subheader("🎲 Controls")
-
-        def _simulate_new_reading():
-            st.session_state.heart_rate = random.randint(55, 130)
-            st.session_state.resting_hr = random.randint(45, 90)
-            st.session_state.hrv = random.randint(15, 90)
-            st.session_state.blood_pressure_variability = random.randint(0, 20)
-            st.session_state.heart_rate_recovery = random.randint(5, 40)
-            st.session_state.sleep_quality = random.randint(30, 100)
-            st.session_state.steps = random.randint(500, 15000)
-            st.session_state.battery = random.randint(10, 100)
-
-        st.button("🎲 Simulate New Reading", use_container_width=True, on_click=_simulate_new_reading)
-
-        st.session_state.autoplay = st.checkbox(
-            "▶️ Auto-Play Demo Scenarios",
-            value=st.session_state.autoplay
-        )
-
-    st.markdown("---")
-    slider_row1 = st.columns(4)
-    with slider_row1[0]:
-        heart_rate = st.slider("❤️ Heart Rate (BPM)", 30, 180, key="heart_rate")
-    with slider_row1[1]:
-        resting_hr = st.slider("💓 Resting HR (BPM)", 30, 130, key="resting_hr")
-    with slider_row1[2]:
-        hrv = st.slider("📊 HRV (ms)", 0, 150, key="hrv")
-    with slider_row1[3]:
-        blood_pressure_variability = st.slider("🩺 BP Var (mmHg)", 0, 40, key="blood_pressure_variability")
-
-    slider_row2 = st.columns(4)
-    with slider_row2[0]:
-        heart_rate_recovery = st.slider("🏃 Recovery (BPM)", 0, 60, key="heart_rate_recovery")
-    with slider_row2[1]:
-        sleep_quality = st.slider("😴 Sleep Quality (%)", 0, 100, key="sleep_quality")
-    with slider_row2[2]:
-        steps = st.slider("👟 Daily Steps", 0, 20000, step=100, key="steps")
-    with slider_row2[3]:
-        battery = st.slider("🔋 Watch Battery (%)", 0, 100, key="battery")
-
-watch_connected = True
-last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
 
 # =====================================================
 # HOME PAGE
@@ -2161,7 +2928,7 @@ if page == "🏠 Home":
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
-    qa_cols = st.columns(4)
+    qa_cols = st.columns(5)
     with qa_cols[0]:
         def _simulate_quick_vitals():
             st.session_state.heart_rate = random.randint(55, 130)
@@ -2184,6 +2951,10 @@ if page == "🏠 Home":
         if st.button("🫀 Open 3D Heart Model", use_container_width=True):
             st.session_state.current_page = "❤️ Heart Dashboard"
             st.session_state.heart_dashboard_tab = "🫀 3D MODEL"
+            st.rerun()
+    with qa_cols[4]:
+        if st.button("🗞️ Weekly Story", use_container_width=True):
+            st.session_state.current_page = "🧠 AI Insights"
             st.rerun()
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
@@ -2356,6 +3127,194 @@ elif page == "⌚ Smartwatch":
         st.subheader("Supported Ecosystems")
         st.write("⚡ Apple HealthKit • WHOOP • Oura Ring • Garmin Connect • Google Fit")
         st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+    st.markdown("<h3>📷 No Watch? Scan Your Pulse With Your Camera</h3>", unsafe_allow_html=True)
+    st.caption(
+        "Uses your webcam to detect tiny color changes in your face caused by blood flow (a technique "
+        "called remote photoplethysmography). Works best in steady, bright light while holding still."
+    )
+
+    components.html(
+        """
+        <div style="font-family: Inter, sans-serif; color: #E6F3FA; max-width: 480px;">
+            <div style="position:relative; width:320px; height:240px; border-radius:12px; overflow:hidden;
+                        background:#000; border:1px solid rgba(255,255,255,0.1);">
+                <video id="pg-video" autoplay playsinline muted
+                    style="width:100%; height:100%; object-fit:cover; transform:scaleX(-1);"></video>
+                <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                            pointer-events:none;">
+                    <div style="width:130px; height:170px; border:2px dashed rgba(0,229,255,0.6); border-radius:50%;"></div>
+                </div>
+            </div>
+            <canvas id="pg-canvas" width="64" height="64" style="display:none;"></canvas>
+
+            <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
+                <button id="pg-start-btn" style="background:#00E5FF; color:#07121a; border:none; padding:10px 18px;
+                    border-radius:8px; font-weight:700; cursor:pointer;">▶ Start 20s Scan</button>
+                <div id="pg-status" style="font-size:13px; color:#8A99AD;">Camera not started yet.</div>
+            </div>
+
+            <div style="margin-top:10px; height:6px; width:320px; background:rgba(255,255,255,0.08); border-radius:4px; overflow:hidden;">
+                <div id="pg-progress" style="height:100%; width:0%; background:#00E5FF; transition:width 0.2s linear;"></div>
+            </div>
+
+            <div id="pg-result" style="margin-top:16px; font-size:15px;"></div>
+        </div>
+
+        <script>
+        (function() {
+            const startBtn = document.getElementById('pg-start-btn');
+            const status = document.getElementById('pg-status');
+            const progress = document.getElementById('pg-progress');
+            const resultBox = document.getElementById('pg-result');
+            const video = document.getElementById('pg-video');
+            const canvas = document.getElementById('pg-canvas');
+            const ctx = canvas.getContext('2d');
+
+            const SCAN_MS = 20000;
+            const SAMPLE_INTERVAL_MS = 66; // ~15 fps
+
+            startBtn.addEventListener('click', async function() {
+                resultBox.innerHTML = '';
+                startBtn.disabled = true;
+                startBtn.style.opacity = 0.6;
+                status.textContent = 'Requesting camera permission...';
+
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+                } catch (err) {
+                    status.textContent = 'Camera access was blocked or unavailable: ' + err.message;
+                    startBtn.disabled = false;
+                    startBtn.style.opacity = 1;
+                    return;
+                }
+                video.srcObject = stream;
+                status.textContent = 'Hold still and keep your face steady...';
+
+                const samples = [];
+                const startTime = Date.now();
+
+                const sampleTimer = setInterval(function() {
+                    const elapsed = Date.now() - startTime;
+                    progress.style.width = Math.min(100, (elapsed / SCAN_MS) * 100) + '%';
+
+                    try {
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        const frame = ctx.getImageData(16, 16, 32, 32).data; // central region only
+                        let sum = 0, count = 0;
+                        for (let i = 0; i < frame.length; i += 4) {
+                            sum += frame[i + 1]; // green channel
+                            count++;
+                        }
+                        samples.push({ t: elapsed / 1000, v: sum / count });
+                    } catch (e) { /* frame not ready yet, skip */ }
+
+                    if (elapsed >= SCAN_MS) {
+                        clearInterval(sampleTimer);
+                        stream.getTracks().forEach(t => t.stop());
+                        finishScan(samples);
+                    }
+                }, SAMPLE_INTERVAL_MS);
+            });
+
+            function finishScan(samples) {
+                status.textContent = 'Processing your scan...';
+                progress.style.width = '100%';
+
+                if (samples.length < 30) {
+                    status.textContent = 'Scan too short or camera too slow — try again.';
+                    startBtn.disabled = false;
+                    startBtn.style.opacity = 1;
+                    return;
+                }
+
+                const values = samples.map(s => s.v);
+
+                // Detrend: subtract a ~1.5s moving average to remove slow lighting drift.
+                const winLong = Math.max(3, Math.round(1.5 * 1000 / SAMPLE_INTERVAL_MS));
+                const detrended = values.map((v, i) => {
+                    const start = Math.max(0, i - winLong);
+                    const window = values.slice(start, i + 1);
+                    const avg = window.reduce((a, b) => a + b, 0) / window.length;
+                    return v - avg;
+                });
+
+                // Light smoothing to reduce single-frame noise.
+                const smoothed = detrended.map((v, i) => {
+                    const a = detrended[Math.max(0, i - 1)];
+                    const b = detrended[Math.min(detrended.length - 1, i + 1)];
+                    return (a + v + b) / 3;
+                });
+
+                // Peak detection with a minimum spacing so we don't count noise as
+                // multiple beats (human heart rate physically can't exceed ~220bpm).
+                const minSpacingSec = 60 / 220;
+                const peakTimes = [];
+                for (let i = 2; i < smoothed.length - 2; i++) {
+                    if (smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1] && smoothed[i] > 0.5) {
+                        const t = samples[i].t;
+                        if (peakTimes.length === 0 || t - peakTimes[peakTimes.length - 1] >= minSpacingSec) {
+                            peakTimes.push(t);
+                        }
+                    }
+                }
+
+                if (peakTimes.length < 4) {
+                    resultBox.innerHTML = '<div style="color:#FF6B6B;">Couldn\\'t get a clear reading. ' +
+                        'Try again with brighter, steady lighting and stay still.</div>';
+                    status.textContent = 'Scan complete — low signal quality.';
+                    startBtn.disabled = false;
+                    startBtn.style.opacity = 1;
+                    return;
+                }
+
+                const intervals = [];
+                for (let i = 1; i < peakTimes.length; i++) {
+                    intervals.push(peakTimes[i] - peakTimes[i - 1]);
+                }
+                const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+                let bpm = Math.round(60 / avgInterval);
+                bpm = Math.max(40, Math.min(180, bpm));
+
+                status.textContent = 'Scan complete.';
+                resultBox.innerHTML =
+                    '<div style="font-size:34px; font-weight:800; color:#00E5FF;">' + bpm + ' BPM</div>' +
+                    '<div style="color:#8A99AD; font-size:13px; margin-top:4px;">Detected from ' + peakTimes.length +
+                    ' pulses over 20 seconds. Type this number into the field below to apply it to your dashboard.</div>';
+
+                startBtn.disabled = false;
+                startBtn.style.opacity = 1;
+                startBtn.textContent = '▶ Scan Again';
+            }
+        })();
+        </script>
+        """,
+        height=420,
+    )
+
+    st.caption(
+        "A browser-based widget can't write directly into the app's backend, so once you see your BPM "
+        "above, enter it here and confirm to apply it."
+    )
+    scan_col1, scan_col2 = st.columns([1, 1])
+    with scan_col1:
+        scanned_bpm = st.number_input("Detected BPM from scan", min_value=40, max_value=180, value=st.session_state.heart_rate, key="camera_scan_bpm")
+    with scan_col2:
+        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+        if st.button("✅ Apply to My Dashboard", use_container_width=True):
+            st.session_state.pending_camera_bpm = int(scanned_bpm)
+            st.session_state.camera_apply_confirm = int(scanned_bpm)
+            st.session_state.activity_feed.insert(0, {
+                "time": "just now",
+                "event": f"Heart rate updated to {int(scanned_bpm)} BPM via camera scan"
+            })
+            st.rerun()
+
+    if st.session_state.get("camera_apply_confirm"):
+        st.success(f"Applied — your heart rate is now set to {st.session_state.camera_apply_confirm} BPM. Current session_state.heart_rate is now {st.session_state.heart_rate}.")
+        st.session_state.camera_apply_confirm = None
 
 # =====================================================
 # HEALTH SUMMARY PAGE
@@ -2588,6 +3547,24 @@ elif page == "📈 Health Summary":
                     mime="application/pdf",
                     use_container_width=True,
                 )
+
+                st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
+                doctor_email = st.text_input("📧 Doctor's email", placeholder="doctor@clinic.com", key="doctor_email_input")
+                if doctor_email:
+                    subject = quote(f"PulseGuard Heart Health Report — {period_label}")
+                    body = quote(
+                        "Hi,\n\nI'm sharing my PulseGuard heart health report with you. I've attached the "
+                        "PDF I downloaded from the app — you'll need to attach it manually since browsers "
+                        "don't allow apps to auto-attach files to an email for security reasons.\n\nThanks!"
+                    )
+                    gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quote(doctor_email)}&su={subject}&body={body}"
+                    st.link_button("📧 Open Gmail to Send to Doctor", gmail_url, use_container_width=True)
+                    st.caption(
+                        "This opens Gmail with your doctor's email, subject, and a note already filled in — "
+                        "just attach the PDF you downloaded above before hitting send. Browsers can't auto-attach "
+                        "files to an email link, so that one step has to stay manual."
+                    )
+
                 # Once downloaded, clear it so the button disappears — the person
                 # has to press Generate Report again (with whatever name/window
                 # they currently have set) before they can download again.
@@ -2604,6 +3581,43 @@ elif page == "📈 Health Summary":
         )
         st.session_state.health_summary_scroll_target = None
 
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.subheader("📲 Share Your Heart Score")
+        st.caption("Generate a story-shaped card of today's score to post on Instagram, Snapchat, or anywhere else.")
+
+        if st.button("✨ Generate Share Card", use_container_width=True):
+            _current_proj, _projected_score, _slope = compute_score_projection(days_ahead=30)
+            _trend_word = "improving" if _slope > 0.05 else "declining" if _slope < -0.05 else "steady"
+            st.session_state.share_card_png_bytes = generate_share_card(
+                score=score,
+                resting_hr=st.session_state.resting_hr,
+                hrv=st.session_state.hrv,
+                sleep_quality=st.session_state.sleep_quality,
+                streak_days=st.session_state.streak_days,
+                patient_name=st.session_state.patient_name,
+                trend_word=_trend_word,
+            )
+
+        if st.session_state.get("share_card_png_bytes"):
+            preview_col, _spacer_col = st.columns([1, 1])
+            with preview_col:
+                st.image(st.session_state.share_card_png_bytes, use_container_width=True)
+            st.download_button(
+                label="⬇️ Download Story Card (PNG)",
+                data=st.session_state.share_card_png_bytes,
+                file_name=f"pulseguard_heart_score_{datetime.now(ZoneInfo('America/New_York')).strftime('%Y%m%d')}.png",
+                mime="image/png",
+                use_container_width=True,
+            )
+            st.caption(
+                "Sized for Instagram/Snapchat Stories (1080×1920, PNG) — a PNG shares cleanly on social "
+                "apps, unlike a PDF which most platforms won't render as an image. Just save it and post "
+                "like any other photo."
+            )
+        else:
+            st.caption("Click **Generate Share Card** to build a story-ready image of today's heart score.")
+
 
 # =====================================================
 # AI CHAT ASSISTANT PAGE
@@ -2619,6 +3633,16 @@ elif page == "🤖 AI Assistant":
             ("assistant", "Hello! I am your PulseGuard AI companion. How can I help analyze your cardiovascular metrics today?")
         ]
 
+    # Proactively flag anything unusual compared to this person's own
+    # baseline, once per session, instead of waiting for them to ask.
+    if not st.session_state.anomaly_alert_shown:
+        st.session_state.anomaly_alert_shown = True
+        anomalies = detect_anomalies()
+        if anomalies:
+            alert_msg = get_anomaly_alert_message(anomalies)
+            if alert_msg:
+                st.session_state.chat_history.append(("assistant", alert_msg))
+
     for role, content in st.session_state.chat_history:
         if role == "user":
             st.markdown(f'<div class="chat-bubble-user">{content}</div>', unsafe_allow_html=True)
@@ -2628,26 +3652,142 @@ elif page == "🤖 AI Assistant":
     user_question = st.chat_input("Ask a question about your heart health...")
     if user_question:
         with st.spinner("Analyzing your telemetry and preparing a response..."):
-            assistant_response = get_ai_response(user_question)
+            # Pass everything said so far (before this new message) so Gemini
+            # has real conversation memory instead of starting fresh each time.
+            assistant_response = get_ai_response(user_question, st.session_state.chat_history)
         st.session_state.chat_history.append(("user", user_question))
         st.session_state.chat_history.append(("assistant", assistant_response))
         st.rerun()
 
 # =====================================================
-# ACCURACY TIPS PAGE
+# AI INSIGHTS PAGE (Weekly Story, Correlation Explorer,
+# Heart Age / Predictive Trajectory)
 # =====================================================
-elif page == "💡 Accuracy Tips":
+elif page == "🧠 AI Insights":
 
-    st.markdown("<h2 style='font-weight:800;'>💡 Optimization & Sensor Accuracy</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='font-weight:800;'>🧠 AI Insights</h2>", unsafe_allow_html=True)
+    st.caption("Deeper, personalized patterns pulled from your history — powered by Gemini.")
     st.markdown("---")
+
+    # --- Weekly Story ---
+    st.markdown("<h3>🗞️ Your Weekly Story</h3>", unsafe_allow_html=True)
+    if st.button("✨ Generate My Weekly Story"):
+        with st.spinner("Reading through your last 7 days..."):
+            st.session_state.weekly_story = get_weekly_story()
+    if st.session_state.weekly_story:
+        st.markdown(
+            f'<div class="glass-card"><p style="color:#c9d6e0;">{st.session_state.weekly_story}</p></div>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.caption("Click the button above for a plain-language recap of your week.")
+
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+
+    # --- Correlation Explorer ---
+    st.markdown("<h3>🔗 Correlation Explorer</h3>", unsafe_allow_html=True)
+    findings = compute_correlations()
+    insight_text = get_correlation_insight(findings)
+    st.markdown(
+        f'<div class="glass-card"><p style="color:#c9d6e0; white-space:pre-line;">{insight_text}</p></div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+
+    # --- Heart Age & Predictive Trajectory ---
+    st.markdown("<h3>📈 Heart Age & Trajectory</h3>", unsafe_allow_html=True)
+    age_col, _ = st.columns([1, 2])
+    with age_col:
+        patient_age = st.number_input("Your age", min_value=18, max_value=100, key="patient_age")
+
+    heart_age, current_score = compute_heart_age(patient_age)
+    current_proj, projected_score, slope = compute_score_projection(days_ahead=30)
+
+    hcol1, hcol2 = st.columns(2)
+    with hcol1:
+        age_diff = patient_age - heart_age
+        age_note = (
+            f"{age_diff} years younger than your age" if age_diff > 0
+            else f"{-age_diff} years older than your age" if age_diff < 0
+            else "right in line with your age"
+        )
+        st.markdown(
+            f"""
+            <div class="glass-card">
+                <h4 style="margin-top:0;">❤️ Estimated Heart Age</h4>
+                <div style="font-size:38px; font-weight:800; color:#00E5FF;">{heart_age}</div>
+                <p style="color:#8A99AD;">Based on today's score, your heart is trending {age_note}.
+                This is a simplified, non-clinical illustration — not a medical measurement.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with hcol2:
+        trend_word = "improving" if slope > 0.05 else "declining" if slope < -0.05 else "holding steady"
+        st.markdown(
+            f"""
+            <div class="glass-card">
+                <h4 style="margin-top:0;">🔮 30-Day Projection</h4>
+                <div style="font-size:38px; font-weight:800; color:#00E5FF;">{projected_score}/100</div>
+                <p style="color:#8A99AD;">If your last 30 days continue at the same pace, your heart score
+                is {trend_word} (currently {current_proj}/100). This is a simple trend projection, not a forecast guarantee.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    trend_scores = get_score_trend(days=30)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=trend_scores, mode="lines", name="Last 30 days", line=dict(color="#00E5FF", width=2)))
+    fig.add_trace(go.Scatter(
+        x=[len(trend_scores) - 1, len(trend_scores) - 1 + 30],
+        y=[trend_scores[-1], projected_score],
+        mode="lines", name="Projected", line=dict(color="#FF6B6B", width=2, dash="dash")
+    ))
+    fig.update_layout(
+        height=280, margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#8A99AD"), showlegend=True,
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", range=[0, 100]),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# =====================================================
+# ABOUT PAGE
+# =====================================================
+elif page == "ℹ️ About":
+
+    st.markdown("<h2 style='font-weight:800;'>ℹ️ About PulseGuard</h2>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    st.markdown(
+        """
+        <div class="glass-card">
+            <h3>Who We Are</h3>
+            <p style="color:#8A99AD;">
+                PulseGuard is developed in coordination with New Jersey Heart Disease Prevention (NJHDP),
+                an initiative focused on reducing preventable cardiovascular disease through early, accessible
+                insight. We build tools that turn everyday wearable data into something people can actually
+                act on, rather than raw numbers that sit unread in an app.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(
             """
             <div class="glass-card">
-                <h3>⌚ Wearable Placement</h3>
-                <p style="color:#8A99AD;">Ensure your wearable fits snugly above the wrist bone. Movement artifacts can create false PPG polling spikes.</p>
+                <h3>🎯 Our Mission</h3>
+                <p style="color:#8A99AD;">
+                    Heart disease remains one of the leading causes of preventable death, and much of the
+                    risk builds quietly over years before it's ever diagnosed. PulseGuard exists to close
+                    that gap — surfacing trends in heart rate, HRV, resting heart rate, and sleep so problems
+                    can be caught and discussed with a clinician long before they become emergencies.
+                </p>
             </div>
             """,
             unsafe_allow_html=True
@@ -2656,25 +3796,28 @@ elif page == "💡 Accuracy Tips":
         st.markdown(
             """
             <div class="glass-card">
-                <h3>💧 Hydration & Signal Quality</h3>
-                <p style="color:#8A99AD;">Dehydration lowers blood volume, leading to elevated resting heart rates and reduced Heart Rate Variability (HRV).</p>
+                <h3>🌱 Our Goals</h3>
+                <p style="color:#8A99AD;">
+                    We're working toward wearable-driven insights that are genuinely understandable —
+                    not just data dashboards, but clear, actionable guidance. Longer term, we want PulseGuard
+                    to help lower the age at which cardiovascular risk is first caught, and to make that kind
+                    of early insight available to anyone with a smartwatch, not just people who already see
+                    a cardiologist regularly.
+                </p>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-# =====================================================
-# ABOUT PAGE
-# =====================================================
-elif page == "ℹ️ About":
-
-    st.markdown("<h2 style='font-weight:800;'>ℹ️ About PulseGuard Platform</h2>", unsafe_allow_html=True)
-    st.markdown("---")
     st.markdown(
         """
         <div class="glass-card">
-            <h3>Mission Overview</h3>
-            <p style="color:#8A99AD;">PulseGuard is developed in coordination with New Jersey Heart Disease Prevention (NJHDP) to transform wearable telemetry into preventative cardiovascular health insights.</p>
+            <h3>⚠️ A Note on What This Is</h3>
+            <p style="color:#8A99AD;">
+                PulseGuard is an informational and educational tool. It is not a diagnostic device and does
+                not replace a doctor. Always talk to a clinician about any concerning symptoms or before
+                making changes to your care based on what you see here.
+            </p>
         </div>
         """,
         unsafe_allow_html=True
@@ -2693,6 +3836,25 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+# --------------------------------------------------
+# Autosave user data (BPM, HRV, history, etc.) back to their
+# account so it's there next time they log in on any device.
+# Skipped for guests, and skipped if nothing actually changed
+# since the last save (avoids hammering the Sheet on every rerun).
+# --------------------------------------------------
+if st.session_state.logged_in and not st.session_state.is_guest:
+    _current_data = {k: st.session_state.get(k) for k in PERSIST_KEYS if k in st.session_state}
+    _current_data_str = json.dumps(_current_data, default=str, sort_keys=True)
+    if st.session_state.get("_last_saved_data_str") != _current_data_str:
+        try:
+            _userdata_ws = get_userdata_worksheet()
+            _save_user_data(_userdata_ws, st.session_state.auth_username, _current_data)
+            st.session_state._last_saved_data_str = _current_data_str
+        except Exception:
+            # Don't crash the app if the save fails; user just won't
+            # get this run's changes persisted until the next save.
+            pass
 
 if st.session_state.autoplay:
     time.sleep(3)
