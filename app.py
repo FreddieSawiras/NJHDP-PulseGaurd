@@ -31,6 +31,57 @@ def get_gemini_client():
     return genai.Client(api_key=GEMINI_API_KEY)
 
 # --------------------------------------------------
+# Email alert configuration — used to proactively email the user when an
+# anomaly is detected, instead of only surfacing it in-app. Uses plain
+# SMTP (Gmail by default) instead of Twilio, since that needs zero
+# compliance profile, zero ID verification, and zero cost.
+#
+# Setup (Gmail):
+#   1. Turn on 2-Step Verification on the Gmail account you'll send from:
+#      myaccount.google.com/security
+#   2. Create an "App Password" at myaccount.google.com/apppasswords
+#      (choose "Mail" as the app) — this gives you a 16-character code,
+#      NOT your normal Gmail password.
+#   3. Add to st.secrets:
+#        ALERT_EMAIL_ADDRESS = "youraccount@gmail.com"
+#        ALERT_EMAIL_APP_PASSWORD = "xxxxxxxxxxxxxxxx"
+# Any other provider works too — just change ALERT_SMTP_HOST/PORT below.
+# --------------------------------------------------
+import smtplib
+from email.mime.text import MIMEText
+
+ALERT_EMAIL_ADDRESS = st.secrets.get("ALERT_EMAIL_ADDRESS", None)
+ALERT_EMAIL_APP_PASSWORD = st.secrets.get("ALERT_EMAIL_APP_PASSWORD", None)
+ALERT_SMTP_HOST = st.secrets.get("ALERT_SMTP_HOST", "smtp.gmail.com")
+ALERT_SMTP_PORT = int(st.secrets.get("ALERT_SMTP_PORT", 587))
+
+
+def email_alerts_configured():
+    return bool(ALERT_EMAIL_ADDRESS and ALERT_EMAIL_APP_PASSWORD)
+
+
+def send_sms_alert(to_email, message):
+    """Send a proactive alert via email. Named send_sms_alert for
+    continuity with the rest of the app, but it sends over SMTP email —
+    no Twilio account, no compliance profile, no ID required."""
+    if not email_alerts_configured():
+        return False, "Email alerts aren't configured (missing secrets — see setup notes above)."
+    if not to_email:
+        return False, "No email address on file."
+    try:
+        msg = MIMEText(message[:5000])
+        msg["Subject"] = "PulseGuard Alert"
+        msg["From"] = ALERT_EMAIL_ADDRESS
+        msg["To"] = to_email
+        with smtplib.SMTP(ALERT_SMTP_HOST, ALERT_SMTP_PORT) as server:
+            server.starttls()
+            server.login(ALERT_EMAIL_ADDRESS, ALERT_EMAIL_APP_PASSWORD)
+            server.sendmail(ALERT_EMAIL_ADDRESS, [to_email], msg.as_string())
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+# --------------------------------------------------
 # Set up page configuration
 # --------------------------------------------------
 st.set_page_config(
@@ -109,7 +160,8 @@ PERSIST_KEYS = [
     "hydration_oz", "streak_days", "logged_symptoms", "meds_state",
     "patient_name", "patient_age", "selected_watch", "connected_since",
     "trend_data", "full_history", "activity_feed", "chat_history",
-    "weekly_story",
+    "weekly_story", "alert_email", "sms_alerts_enabled",
+    "symptom_risk_adjustment", "symptom_risk_note", "symptom_check_at",
 ]
 
 
@@ -179,6 +231,93 @@ def render_login_gate():
             .pg-login-title { font-family: Inter, sans-serif; font-size: 30px; font-weight: 800;
                 color: #E6F3FA; letter-spacing: -0.01em; margin-bottom: 4px; }
             .pg-login-sub { font-family: Inter, sans-serif; color: #8A99AD; margin-bottom: 28px; font-size: 14px; }
+
+            /* Buttons and text inputs on this page render before the site's
+               main CSS block (further down app.py) ever executes, since
+               render_login_gate() calls st.stop() first. Re-declare the same
+               dark styling here so Guest/Log in/Sign up buttons and the
+               username/password boxes match the rest of the site instead of
+               falling back to Streamlit's default white theme. */
+            .stButton > button, div.stFormSubmitButton > button {
+                border-radius: 12px !important;
+                border: none !important;
+                background: linear-gradient(135deg, rgba(6,30,54,0.8), rgba(10,18,34,0.8)) !important;
+                color: #DDEFF7 !important;
+                font-weight: 600 !important;
+                font-size: 13.5px !important;
+                padding: 0.6rem 1.1rem !important;
+                transition: transform 0.18s ease, box-shadow 0.18s ease !important;
+                box-shadow: 0 6px 18px rgba(3,18,35,0.6) !important;
+            }
+            .stButton > button:hover, div.stFormSubmitButton > button:hover {
+                transform: translateY(-2px) !important;
+                box-shadow: 0 10px 26px rgba(0,120,200,0.18) !important;
+            }
+            input, textarea, select, .stTextInput>div>div>input {
+                background: rgba(13, 23, 40, 0.75) !important;
+                border: 1px solid rgba(255,255,255,0.12) !important;
+                color: #E6F3FA !important;
+                padding: 10px 12px !important;
+                border-radius: 10px !important;
+                outline: none !important;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+            }
+            input::placeholder, textarea::placeholder { color: rgba(230,243,250,0.55) !important; }
+            input:focus, textarea:focus, select:focus, .stTextInput>div>div>input:focus {
+                box-shadow: 0 0 28px rgba(124,92,255,0.14), 0 0 8px rgba(0,229,255,0.08) !important;
+                border-color: rgba(124,92,255,0.28) !important;
+            }
+            div[data-baseweb="input"],
+            div[data-baseweb="select"] > div,
+            div[data-testid="stTextInput"] > div > div,
+            div[data-testid="stSelectbox"] > div > div {
+                background-color: rgba(13, 23, 40, 0.75) !important;
+                border: 1px solid rgba(255, 255, 255, 0.12) !important;
+                border-radius: 10px !important;
+                color: #E6F3FA !important;
+            }
+            div[data-baseweb="input"] input,
+            div[data-baseweb="select"] input {
+                color: #E6F3FA !important;
+                background-color: transparent !important;
+            }
+            /* Tabs (Log in / Sign up) — match the lit-up pill treatment
+               used for tabs and toggles elsewhere on the site. */
+            div[data-testid="stTabs"] div[data-baseweb="tab-list"] {
+                background: rgba(255, 255, 255, 0.05) !important;
+                padding: 6px !important;
+                border-radius: 999px !important;
+                border: 1px solid rgba(255, 255, 255, 0.1) !important;
+                gap: 4px !important;
+                width: fit-content !important;
+                margin: 0 auto !important;
+            }
+            div[data-testid="stTabs"] div[data-baseweb="tab-highlight"],
+            div[data-testid="stTabs"] div[data-baseweb="tab-border"] {
+                display: none !important;
+            }
+            div[data-testid="stTabs"] button[data-baseweb="tab"] {
+                border-radius: 999px !important;
+                padding: 8px 22px !important;
+                color: #D7E1EC !important;
+                font-weight: 700 !important;
+                font-size: 12.5px !important;
+                text-transform: uppercase !important;
+                letter-spacing: 0.06em !important;
+                background: transparent !important;
+                transition: all 0.25s ease !important;
+                border: none !important;
+            }
+            div[data-testid="stTabs"] button[data-baseweb="tab"] p { color: inherit !important; }
+            div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
+                color: #00E5FF !important;
+                background: rgba(0, 229, 255, 0.08) !important;
+            }
+            div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+                background: rgba(0, 229, 255, 0.15) !important;
+                color: #00E5FF !important;
+                box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 0 1px rgba(0, 229, 255, 0.3) !important;
+            }
         </style>
         <div class="pg-login-wrap">
             <img src="{logo}" class="pg-login-logo" />
@@ -450,6 +589,13 @@ _defaults = {
     "patient_age": 45,
     "weekly_story": None,
     "anomaly_alert_shown": False,
+    "alert_email": "",
+    "sms_alerts_enabled": False,
+    "symptom_risk_adjustment": 0,
+    "symptom_risk_note": None,
+    "symptom_check_at": None,
+    "last_sms_alert_date": None,
+    "show_symptom_check": False,
 }
 
 for _key, _val in _defaults.items():
@@ -814,12 +960,20 @@ div[role="radiogroup"] label[aria-checked="true"] {
     color: #00E5FF !important;
 }
 
+/* "Lit up" selected state for the pill/tab-style radio toggles (Heart
+   Dashboard's VITALS / 3D MODEL / ECG WAVEFORM, the 7-day/30-day trend
+   toggle, etc.) so the active option glows the same way the active nav
+   button and the login page's active tab do, instead of only changing
+   text color. */
 div[data-testid="stRadio"] button[aria-checked="true"],
 div[data-testid="stRadio"] button[aria-pressed="true"],
 div[role="radiogroup"] button[aria-checked="true"],
 div[role="radiogroup"] button[aria-pressed="true"] {
-    background: rgba(0, 229, 255, 0.1) !important;
-    border-color: rgba(0, 229, 255, 0.2) !important;
+    background: rgba(0, 229, 255, 0.15) !important;
+    border: 1px solid rgba(0, 229, 255, 0.35) !important;
+    border-radius: 999px !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.18), inset 0 0 0 1px rgba(0, 229, 255, 0.25) !important;
+    transition: all 0.25s ease !important;
 }
 
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"],
@@ -833,6 +987,13 @@ div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] * {
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"],
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"] * {
     color: #00E5FF !important;
+}
+
+div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"] {
+    background: rgba(0, 229, 255, 0.15) !important;
+    border-radius: 999px !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.18), inset 0 0 0 1px rgba(0, 229, 255, 0.25) !important;
+    transition: all 0.25s ease !important;
 }
 
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] p {
@@ -1780,7 +1941,7 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
 
 def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
                              sleep_quality=None, steps=None, heart_rate_recovery=None,
-                             blood_pressure_variability=None):
+                             blood_pressure_variability=None, apply_symptom_adjustment=True):
     heart_rate = st.session_state.heart_rate if heart_rate is None else heart_rate
     resting_hr = st.session_state.resting_hr if resting_hr is None else resting_hr
     hrv = st.session_state.hrv if hrv is None else hrv
@@ -1845,6 +2006,19 @@ def generate_health_summary(heart_rate=None, resting_hr=None, hrv=None,
     ]
     score = round(sum(metric_scores) / len(metric_scores))
     score = max(0, min(100, score))
+
+    # Fold in the AI symptom-check adjustment (from "More Accurate Details")
+    # for today's live score only — never for historical trend recomputation,
+    # since that adjustment reflects how the person feels *right now*, not
+    # on any given past day.
+    if apply_symptom_adjustment:
+        _sym_adj = st.session_state.get("symptom_risk_adjustment", 0) or 0
+        if _sym_adj:
+            score = max(0, min(100, score + _sym_adj))
+            _sym_note = st.session_state.get("symptom_risk_note")
+            if _sym_note:
+                concerns = concerns + [f"Symptom check: {_sym_note}"]
+
     return score, positives, concerns
 
 @st.cache_data(show_spinner=False)
@@ -1862,6 +2036,7 @@ def _get_score_trend_cached(history_snapshot, live_vitals, days):
             steps=day["steps"],
             heart_rate_recovery=day["heart_rate_recovery"],
             blood_pressure_variability=day["blood_pressure_variability"],
+            apply_symptom_adjustment=False,
         )
         trend.append(day_score)
     trend.append(generate_health_summary()[0])  # today
@@ -2226,6 +2401,51 @@ def get_anomaly_alert_message(anomalies):
         return (response.text or "").strip() or ("Heads up — a couple of readings look off from your usual baseline:\n" + facts)
     except Exception:
         return "Heads up — a couple of readings look off from your usual baseline:\n" + facts
+
+
+def get_symptom_risk_assessment(symptoms, extra_notes):
+    """Send the user's reported symptoms + free-text notes, alongside their
+    live telemetry, to Gemini and get back a risk-score adjustment plus a
+    plain-language explanation. Returns (adjustment:int, explanation:str,
+    error:str|None). Adjustment is negative (worse) or 0 — this only ever
+    lowers today's score, it never raises it, since self-reported symptoms
+    should never make a computed score look *better*."""
+    client = get_gemini_client()
+    if client is None:
+        return 0, None, "Gemini isn't configured — set GEMINI_API_KEY in secrets."
+
+    context = build_ai_context()
+    symptom_text = ", ".join(symptoms) if symptoms else "None reported"
+
+    prompt = (
+        f"{context}\n\n"
+        f"The person just completed a symptom check-in.\n"
+        f"Reported symptoms: {symptom_text}\n"
+        f"Additional details they typed: {extra_notes.strip() or 'None'}\n\n"
+        "Based on this alongside their telemetry above, decide how much to lower "
+        "today's heart risk score to reflect these self-reported symptoms (it should "
+        "never increase the score). Respond with ONLY raw JSON, no markdown fences, "
+        "in exactly this shape:\n"
+        '{"adjustment": <integer from -30 to 0>, "explanation": <string, 2-3 sentences, '
+        'plain language, calm, not alarmist, no diagnosis, mention seeing a clinician '
+        'if symptoms are concerning>}'
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config={"temperature": 0.4, "max_output_tokens": 400},
+        )
+        raw = (response.text or "").strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(raw)
+        adjustment = int(parsed.get("adjustment", 0))
+        adjustment = max(-30, min(0, adjustment))
+        explanation = str(parsed.get("explanation", "")).strip()
+        return adjustment, explanation, None
+    except (genai_errors.APIError, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
+        return 0, None, f"Couldn't complete the assessment: {exc}"
 
 
 def build_report_window(period_key, custom_start=None, custom_end=None):
@@ -2788,6 +3008,29 @@ with _devctrl_expander:
         )
 
     st.markdown("---")
+    st.subheader("📧 Proactive Email Alerts")
+    st.caption(
+        "PulseGuard will email you when it detects a reading that's unusual for "
+        "*your* own baseline — it doesn't wait for you to open the app."
+    )
+    sms_col1, sms_col2 = st.columns([2, 1])
+    with sms_col1:
+        st.session_state.alert_email = st.text_input(
+            "Email address to send alerts to",
+            value=st.session_state.alert_email,
+        )
+    with sms_col2:
+        st.session_state.sms_alerts_enabled = st.checkbox(
+            "Enable email alerts", value=st.session_state.sms_alerts_enabled
+        )
+    if st.session_state.sms_alerts_enabled and not email_alerts_configured():
+        st.warning(
+            "Email alerts are turned on, but the sending account isn't configured yet "
+            "on the backend (needs ALERT_EMAIL_ADDRESS and ALERT_EMAIL_APP_PASSWORD in "
+            "st.secrets — see the setup comment near the top of app.py)."
+        )
+
+    st.markdown("---")
 
     # Apply any externally-set reading (e.g. from the camera scan) now,
     # before the sliders below are instantiated.
@@ -2817,6 +3060,29 @@ with _devctrl_expander:
 
 watch_connected = True
 last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
+
+# --------------------------------------------------
+# Proactive email alert — runs on every app load/rerun (not just when the
+# person opens the AI Assistant tab), so PulseGuard reaches out on its own
+# the moment it sees something unusual, throttled to one email per day per
+# account. Note: this only fires while the app is actually running — a
+# true always-on watcher (emailing even while nobody has the app open)
+# would need a separate scheduled job (cron / cloud function) hitting this
+# same detect_anomalies() + send_sms_alert() logic outside of Streamlit.
+# --------------------------------------------------
+if st.session_state.sms_alerts_enabled and st.session_state.alert_email:
+    _today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    if st.session_state.get("last_sms_alert_date") != _today_str:
+        _sms_anomalies = detect_anomalies()
+        if _sms_anomalies:
+            _sms_msg = get_anomaly_alert_message(_sms_anomalies)
+            if _sms_msg:
+                _sent, _err = send_sms_alert(
+                    st.session_state.alert_email,
+                    f"PulseGuard alert: {_sms_msg}",
+                )
+                if _sent:
+                    st.session_state.last_sms_alert_date = _today_str
 
 # Application Layout Header
 st.markdown(
@@ -2928,7 +3194,7 @@ if page == "🏠 Home":
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
-    qa_cols = st.columns(5)
+    qa_cols = st.columns(6)
     with qa_cols[0]:
         def _simulate_quick_vitals():
             st.session_state.heart_rate = random.randint(55, 130)
@@ -2956,8 +3222,79 @@ if page == "🏠 Home":
         if st.button("🗞️ Weekly Story", use_container_width=True):
             st.session_state.current_page = "🧠 AI Insights"
             st.rerun()
+    with qa_cols[5]:
+        if st.button("🩺 More Accurate Details", use_container_width=True, type="primary" if st.session_state.symptom_risk_adjustment else "secondary"):
+            st.session_state.show_symptom_check = not st.session_state.show_symptom_check
 
-    st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
+
+    # --------------------------------------------------
+    # Symptom check-in — sends how the person actually feels right now
+    # (not just wearable numbers) to Gemini alongside their live telemetry,
+    # and lets it pull today's Vital Score down to reflect it.
+    # --------------------------------------------------
+    if st.session_state.show_symptom_check:
+        with st.container(border=True):
+            st.markdown(
+                "<div style='font-size:14px; font-weight:800; color:#00E5FF; text-transform:uppercase; "
+                "letter-spacing:0.06em; margin-bottom:4px;'>🩺 Symptom Check-In</div>"
+                "<div style='font-size:13px; color:#8A99AD; margin-bottom:14px;'>"
+                "Tell us how you're actually feeling and we'll factor it into your Vital Score, "
+                "on top of your wearable readings.</div>",
+                unsafe_allow_html=True,
+            )
+            symptom_options = [
+                "Chest pain or pressure", "Shortness of breath", "Dizziness or lightheadedness",
+                "Heart palpitations / racing heart", "Unusual fatigue", "Nausea",
+                "Swelling in legs or ankles", "Cold sweats",
+            ]
+            picked_symptoms = st.multiselect("Symptoms you're experiencing right now", symptom_options)
+            extra_notes = st.text_area(
+                "Anything else worth mentioning? (when it started, how severe, what you were doing, etc.)",
+                height=90,
+            )
+            sc_col1, sc_col2 = st.columns([1, 1])
+            with sc_col1:
+                submit_check = st.button("Update Risk Score", use_container_width=True, type="primary")
+            with sc_col2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.show_symptom_check = False
+                    st.rerun()
+
+            if submit_check:
+                if not picked_symptoms and not extra_notes.strip():
+                    st.warning("Select at least one symptom or add a note before updating your score.")
+                else:
+                    with st.spinner("Analyzing your symptoms alongside your telemetry..."):
+                        adjustment, explanation, error = get_symptom_risk_assessment(picked_symptoms, extra_notes)
+                    if error and adjustment == 0 and explanation is None:
+                        st.error(error)
+                    else:
+                        st.session_state.symptom_risk_adjustment = adjustment
+                        st.session_state.symptom_risk_note = explanation
+                        st.session_state.symptom_check_at = datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %I:%M %p")
+                        st.session_state.activity_feed.insert(0, {
+                            "time": "Just now",
+                            "event": f"Symptom check-in completed (score adjusted {adjustment:+d})" if adjustment else "Symptom check-in completed",
+                        })
+                        st.success(f"Heart risk score updated. {('Adjustment: ' + str(adjustment) + ' points.') if adjustment else 'No adjustment needed based on what you reported.'}")
+                        if explanation:
+                            st.info(explanation)
+                        st.session_state.show_symptom_check = False
+                        st.rerun()
+
+    if st.session_state.symptom_risk_adjustment and not st.session_state.show_symptom_check:
+        st.markdown(
+            f"""
+            <div class="glass-card" style="border-left: 4px solid {WARN}; padding:14px 22px; margin-bottom:16px;">
+                <div style="font-size:12px; font-weight:800; color:{WARN}; text-transform:uppercase; letter-spacing:0.06em;">
+                    🩺 Symptom Check-In Applied ({st.session_state.symptom_check_at})
+                </div>
+                <div style="font-size:13px; color:#E2E8F0; margin-top:4px;">{st.session_state.symptom_risk_note or ''}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>📊 Core Telemetry Metrics</div>", unsafe_allow_html=True)
     
