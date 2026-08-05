@@ -17,10 +17,37 @@ from google import genai
 from google.genai import errors as genai_errors
 
 # --------------------------------------------------
+# Safe secrets getter — st.secrets normally behaves like a dict, but if
+# no secrets.toml exists at all (common on a fresh local checkout or a
+# fresh deploy before secrets are added), some Streamlit versions raise
+# instead of just returning the default from .get(). This wrapper makes
+# every secrets lookup in the app crash-proof either way.
+def _secret(key, default=None):
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+# --------------------------------------------------
 # Gemini model configuration
 # Get a free API key from https://aistudio.google.com/apikey
-GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-3.6-flash")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
+#
+# GEMINI_API_KEY_SOURCE tracks whether the key came from an environment
+# variable or st.secrets (not surfaced in the UI — kept only in case
+# it's useful for local debugging).
+GEMINI_MODEL = (_secret("GEMINI_MODEL", "gemini-3.6-flash") or "").strip() or "gemini-3.6-flash"
+
+_env_key = os.getenv("GEMINI_API_KEY")
+_secrets_key = _secret("GEMINI_API_KEY", None)
+if _env_key:
+    GEMINI_API_KEY = _env_key.strip()
+    GEMINI_API_KEY_SOURCE = "environment variable"
+elif _secrets_key:
+    GEMINI_API_KEY = _secrets_key.strip()
+    GEMINI_API_KEY_SOURCE = "st.secrets"
+else:
+    GEMINI_API_KEY = None
+    GEMINI_API_KEY_SOURCE = "not set"
 
 
 @st.cache_resource
@@ -29,6 +56,25 @@ def get_gemini_client():
     if not GEMINI_API_KEY:
         return None
     return genai.Client(api_key=GEMINI_API_KEY)
+
+
+def _friendly_gemini_error(exc):
+    """Turn raw Gemini API errors into something actionable instead of a
+    dumped JSON blob. Special-cased for ACCESS_TOKEN_TYPE_UNSUPPORTED,
+    which as of mid-2026 is a known, ongoing issue with newly-issued
+    'AQ.' format API keys being rejected server-side by Google — not
+    something fixable from the app's code. See:
+    https://ai.google.dev/gemini-api/docs/api-key"""
+    text = str(exc)
+    if "ACCESS_TOKEN_TYPE_UNSUPPORTED" in text:
+        return (
+            "Gemini rejected the request (401 ACCESS_TOKEN_TYPE_UNSUPPORTED). "
+            "This is a known, currently-open issue on Google's side affecting "
+            "newly issued 'AQ.' format API keys — it isn't something in this "
+            "app's code. Try restricting the key to 'Gemini API only' in AI "
+            "Studio, or file a report at https://ai.google.dev/gemini-api/docs/api-key."
+        )
+    return text
 
 # --------------------------------------------------
 # Email alert configuration — used to proactively email the user when an
@@ -50,10 +96,10 @@ def get_gemini_client():
 import smtplib
 from email.mime.text import MIMEText
 
-ALERT_EMAIL_ADDRESS = st.secrets.get("ALERT_EMAIL_ADDRESS", None)
-ALERT_EMAIL_APP_PASSWORD = st.secrets.get("ALERT_EMAIL_APP_PASSWORD", None)
-ALERT_SMTP_HOST = st.secrets.get("ALERT_SMTP_HOST", "smtp.gmail.com")
-ALERT_SMTP_PORT = int(st.secrets.get("ALERT_SMTP_PORT", 587))
+ALERT_EMAIL_ADDRESS = _secret("ALERT_EMAIL_ADDRESS", None)
+ALERT_EMAIL_APP_PASSWORD = _secret("ALERT_EMAIL_APP_PASSWORD", None)
+ALERT_SMTP_HOST = _secret("ALERT_SMTP_HOST", "smtp.gmail.com")
+ALERT_SMTP_PORT = int(_secret("ALERT_SMTP_PORT", 587))
 
 
 def email_alerts_configured():
@@ -160,8 +206,9 @@ PERSIST_KEYS = [
     "hydration_oz", "streak_days", "logged_symptoms", "meds_state",
     "patient_name", "patient_age", "selected_watch", "connected_since",
     "trend_data", "full_history", "activity_feed", "chat_history",
-    "weekly_story", "alert_email", "sms_alerts_enabled",
+    "weekly_story", "alert_email", "sms_alerts_enabled", "emergency_contact_email",
     "symptom_risk_adjustment", "symptom_risk_note", "symptom_check_at",
+    "is_subscribed",
 ]
 
 
@@ -210,27 +257,74 @@ def _save_user_data(worksheet, username, data: dict):
         worksheet.append_row([username, payload, now])
 
 
+# ==========================================================
+# GOOGLE SHEETS SURVEY — feedback survey responses, one row per
+# submission, in their own worksheet tab of the same spreadsheet:
+#   username | q1_easy_to_use | q2_favorite_feature | q3_missing_feature |
+#   q4_recommend | free_text | submitted_at
+# ==========================================================
+SURVEY_WORKSHEET_NAME = "Survey"
+SURVEY_HEADER_ROW = [
+    "username", "q1_easy_to_use", "q2_favorite_feature",
+    "q3_missing_feature", "q4_recommend", "free_text", "submitted_at",
+]
+
+
+@st.cache_resource
+def get_survey_worksheet():
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=AUTH_SCOPES)
+    client = gspread.authorize(creds)
+    sheet = client.open(AUTH_SHEET_NAME)
+    try:
+        return sheet.worksheet(SURVEY_WORKSHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sheet.add_worksheet(
+            title=SURVEY_WORKSHEET_NAME, rows=1000, cols=len(SURVEY_HEADER_ROW)
+        )
+        ws.append_row(SURVEY_HEADER_ROW)
+        return ws
+
+
+def _save_survey_response(worksheet, username, answers: dict, free_text: str):
+    """Append one row for this survey submission. Multiple submissions
+    per user are allowed (each is its own row)."""
+    worksheet.append_row([
+        username or "guest",
+        answers.get("q1_easy_to_use", ""),
+        answers.get("q2_favorite_feature", ""),
+        answers.get("q3_missing_feature", ""),
+        answers.get("q4_recommend", ""),
+        free_text or "",
+        datetime.now(ZoneInfo("America/New_York")).isoformat(),
+    ])
+
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "auth_username" not in st.session_state:
     st.session_state.auth_username = None
 if "is_guest" not in st.session_state:
     st.session_state.is_guest = False
+if "survey_submitted" not in st.session_state:
+    st.session_state.survey_submitted = False
+if "is_subscribed" not in st.session_state:
+    st.session_state.is_subscribed = False
 
 
 def render_login_gate():
     st.markdown("""
         <style>
             html, body, [data-testid="stAppViewContainer"] {
-                background-color: #07121a !important;
+                background-color: #071722 !important;
             }
             section[data-testid="stSidebar"], header[data-testid="stHeader"] { display: none !important; }
             .pg-login-wrap { max-width: 440px; margin: 6vh auto 0 auto; text-align: center; }
             .pg-login-logo { width: 56px; height: 56px; border-radius: 14px; margin-bottom: 14px;
-                box-shadow: 0 24px 60px rgba(0,229,255,0.2); }
+                box-shadow: 0 24px 60px rgba(76, 155, 191,0.2); }
             .pg-login-title { font-family: Inter, sans-serif; font-size: 30px; font-weight: 800;
-                color: #E6F3FA; letter-spacing: -0.01em; margin-bottom: 4px; }
-            .pg-login-sub { font-family: Inter, sans-serif; color: #8A99AD; margin-bottom: 28px; font-size: 14px; }
+                color: #F4FBFF; letter-spacing: -0.01em; margin-bottom: 4px; }
+            .pg-login-sub { font-family: Inter, sans-serif; color: #8FB0C1; margin-bottom: 28px; font-size: 14px; }
 
             /* Buttons and text inputs on this page render before the site's
                main CSS block (further down app.py) ever executes, since
@@ -241,44 +335,44 @@ def render_login_gate():
             .stButton > button, div.stFormSubmitButton > button {
                 border-radius: 12px !important;
                 border: none !important;
-                background: linear-gradient(135deg, rgba(6,30,54,0.8), rgba(10,18,34,0.8)) !important;
-                color: #DDEFF7 !important;
+                background: linear-gradient(135deg, rgba(14, 34, 48,0.92), rgba(11, 28, 40,0.92)) !important;
+                color: #F4FBFF !important;
                 font-weight: 600 !important;
                 font-size: 13.5px !important;
                 padding: 0.6rem 1.1rem !important;
                 transition: transform 0.18s ease, box-shadow 0.18s ease !important;
-                box-shadow: 0 6px 18px rgba(3,18,35,0.6) !important;
+                box-shadow: 0 6px 18px rgba(3, 17, 13,0.6) !important;
             }
             .stButton > button:hover, div.stFormSubmitButton > button:hover {
                 transform: translateY(-2px) !important;
-                box-shadow: 0 10px 26px rgba(0,120,200,0.18) !important;
+                box-shadow: 0 10px 26px rgba(76, 155, 191,0.18) !important;
             }
             input, textarea, select, .stTextInput>div>div>input {
-                background: rgba(13, 23, 40, 0.75) !important;
+                background: rgba(14, 34, 48, 0.78) !important;
                 border: 1px solid rgba(255,255,255,0.12) !important;
-                color: #E6F3FA !important;
+                color: #F4FBFF !important;
                 padding: 10px 12px !important;
                 border-radius: 10px !important;
                 outline: none !important;
                 box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
             }
-            input::placeholder, textarea::placeholder { color: rgba(230,243,250,0.55) !important; }
+            input::placeholder, textarea::placeholder { color: rgba(244, 251, 255,0.55) !important; }
             input:focus, textarea:focus, select:focus, .stTextInput>div>div>input:focus {
-                box-shadow: 0 0 28px rgba(124,92,255,0.14), 0 0 8px rgba(0,229,255,0.08) !important;
-                border-color: rgba(124,92,255,0.28) !important;
+                box-shadow: 0 0 28px rgba(245, 158, 11,0.14), 0 0 8px rgba(76, 155, 191,0.08) !important;
+                border-color: rgba(255, 107, 107,0.2) !important;
             }
             div[data-baseweb="input"],
             div[data-baseweb="select"] > div,
             div[data-testid="stTextInput"] > div > div,
             div[data-testid="stSelectbox"] > div > div {
-                background-color: rgba(13, 23, 40, 0.75) !important;
+                background-color: rgba(14, 34, 48, 0.78) !important;
                 border: 1px solid rgba(255, 255, 255, 0.12) !important;
                 border-radius: 10px !important;
-                color: #E6F3FA !important;
+                color: #EAF7F0 !important;
             }
             div[data-baseweb="input"] input,
             div[data-baseweb="select"] input {
-                color: #E6F3FA !important;
+                color: #EAF7F0 !important;
                 background-color: transparent !important;
             }
             /* Tabs (Log in / Sign up) — match the lit-up pill treatment
@@ -299,7 +393,7 @@ def render_login_gate():
             div[data-testid="stTabs"] button[data-baseweb="tab"] {
                 border-radius: 999px !important;
                 padding: 8px 22px !important;
-                color: #D7E1EC !important;
+                color: #DCECF4 !important;
                 font-weight: 700 !important;
                 font-size: 12.5px !important;
                 text-transform: uppercase !important;
@@ -310,13 +404,13 @@ def render_login_gate():
             }
             div[data-testid="stTabs"] button[data-baseweb="tab"] p { color: inherit !important; }
             div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
-                color: #00E5FF !important;
-                background: rgba(0, 229, 255, 0.08) !important;
+                color: #4C9BBF !important;
+                background: rgba(76, 155, 191, 0.08) !important;
             }
             div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
-                background: rgba(0, 229, 255, 0.15) !important;
-                color: #00E5FF !important;
-                box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 0 1px rgba(0, 229, 255, 0.3) !important;
+                background: rgba(76, 155, 191, 0.15) !important;
+                color: #4C9BBF !important;
+                box-shadow: 0 0 20px rgba(76, 155, 191, 0.15), inset 0 0 0 1px rgba(76, 155, 191, 0.3) !important;
             }
         </style>
         <div class="pg-login-wrap">
@@ -338,7 +432,7 @@ def render_login_gate():
             st.session_state.is_guest = True
             st.rerun()
         st.markdown(
-            "<div style='text-align:center; color:#5c6b7a; font-size:12px; margin:14px 0;'>"
+            "<div style='text-align:center; color:#66807A; font-size:12px; margin:14px 0;'>"
             "or sign in below to save your data across visits</div>",
             unsafe_allow_html=True
         )
@@ -414,7 +508,7 @@ if not st.session_state.boot_loader_shown:
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(7, 18, 26, 0.98);
+            background: rgba(7, 17, 13, 0.98);
             animation: pulseguardBootFadeOut 0.8s ease 5.2s forwards;
         }
         .pulseguard-boot-loader-inner {
@@ -426,19 +520,19 @@ if not st.session_state.boot_loader_shown:
             width: 64px;
             height: 64px;
             border-radius: 18px;
-            box-shadow: 0 24px 60px rgba(0, 229, 255, 0.2);
+            box-shadow: 0 24px 60px rgba(16, 185, 129, 0.2);
             border: 1px solid rgba(255,255,255,0.08);
         }
         .pulseguard-boot-loader-text {
-            color: #E6F3FA;
+            color: #EAF7F0;
             font-family: Inter, sans-serif;
             font-size: 26px;
             font-weight: 800;
             letter-spacing: 0.02em;
-            text-shadow: 0 0 18px rgba(0,229,255,0.15);
+            text-shadow: 0 0 18px rgba(16, 185, 129,0.15);
         }
         .pulseguard-boot-loader-subtext {
-            color: #9fb0c0;
+            color: #9AB0A5;
             font-family: Inter, sans-serif;
             font-size: 14px;
             margin-top: 6px;
@@ -501,7 +595,7 @@ loader_html = """
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(7, 18, 26, 0.98);
+    background: rgba(7, 17, 13, 0.98);
     animation: pulseguardFadeOut 0.8s ease 4.3s forwards;
 }
 .pulseguard-loader-inner {
@@ -514,19 +608,19 @@ loader_html = """
     width: 64px;
     height: 64px;
     border-radius: 18px;
-    box-shadow: 0 24px 60px rgba(0, 229, 255, 0.2);
+    box-shadow: 0 24px 60px rgba(16, 185, 129, 0.2);
     border: 1px solid rgba(255,255,255,0.08);
 }
 .pulseguard-loader-text {
-    color: #E6F3FA;
+    color: #EAF7F0;
     font-family: Inter, sans-serif;
     font-size: 26px;
     font-weight: 800;
     letter-spacing: 0.02em;
-    text-shadow: 0 0 18px rgba(0,229,255,0.15);
+    text-shadow: 0 0 18px rgba(16, 185, 129,0.15);
 }
 .pulseguard-loader-subtext {
-    color: #9fb0c0;
+    color: #9AB0A5;
     font-family: Inter, sans-serif;
     font-size: 14px;
     margin-top: 6px;
@@ -591,6 +685,8 @@ _defaults = {
     "anomaly_alert_shown": False,
     "alert_email": "",
     "sms_alerts_enabled": False,
+    "emergency_contact_email": "",
+    "last_emergency_alert_date": None,
     "symptom_risk_adjustment": 0,
     "symptom_risk_note": None,
     "symptom_check_at": None,
@@ -655,6 +751,17 @@ TIPS = [
 if "tip_index" not in st.session_state:
     st.session_state.tip_index = datetime.now(ZoneInfo("America/New_York")).timetuple().tm_yday % len(TIPS)
 
+# Clinical palette
+UI_BG = "#071722"
+UI_SURFACE = "#0E2230"
+UI_SURFACE_ALT = "#133449"
+TEXT_PRIMARY = "#F4FBFF"
+TEXT_MUTED = "#8FB0C1"
+UI_ACCENT = "#4C9BBF"
+UI_ACCENT_DARK = "#2F7597"
+HEART_PULSE = "#FF6B6B"
+GOOD, WARN, DANGER = UI_ACCENT, "#F59E0B", "#EF4444"
+
 SCENARIOS = [
     {
         "heart_rate": 68, "resting_hr": 58, "hrv": 72,
@@ -674,15 +781,12 @@ SCENARIOS = [
 ]
 
 WATCH_OPTIONS = {
-    "⌚ Apple Watch": "#00E5FF",
-    "⌚ Samsung Galaxy Watch": "#7C5CFF",
-    "⌚ Google Pixel Watch": "#4F8BFF",
-    "⌚ Garmin": "#FF4D6D",
-    "⌚ Fitbit": "#00E5FF",
+    "⌚ Apple Watch": UI_ACCENT,
+    "⌚ Samsung Galaxy Watch": "#F59E0B",
+    "⌚ Google Pixel Watch": "#38BDF8",
+    "⌚ Garmin": DANGER,
+    "⌚ Fitbit": UI_ACCENT,
 }
-
-# Color Constants
-GOOD, WARN, DANGER = "#00E5FF", "#FFB703", "#FF4D6D"
 
 def hex_to_rgba(hex_color, alpha=0.2):
     hex_color = hex_color.lstrip("#")
@@ -819,24 +923,38 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
+:root {
+    --ui-bg: #071722;
+    --ui-surface: #0E2230;
+    --ui-surface-2: #133449;
+    --ui-border: rgba(255,255,255,0.08);
+    --text-primary: #F4FBFF;
+    --text-muted: #8FB0C1;
+    --accent: #4C9BBF;
+    --accent-strong: #2F7597;
+    --pulse: #FF6B6B;
+    --warn: #F59E0B;
+    --danger: #EF4444;
+}
+
 /* Base layout and typography */
 html, body, [data-testid="stAppViewContainer"] {
-    background-color: #07121a !important;
+    background-color: var(--ui-bg) !important;
     background-image:
-        radial-gradient(circle at 12% 12%, rgba(0,229,255,0.04) 0%, transparent 38%),
-        radial-gradient(circle at 88% 18%, rgba(124,92,255,0.05) 0%, transparent 38%),
-        linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px) !important;
+        radial-gradient(circle at 12% 12%, rgba(76, 155, 191, 0.12) 0%, transparent 38%),
+        radial-gradient(circle at 88% 18%, rgba(255, 107, 107, 0.10) 0%, transparent 38%),
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px) !important;
     background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px !important;
     font-family: 'Inter', -apple-system, 'Plus Jakarta Sans', sans-serif !important;
-    color: #E6F3FA !important;
+    color: var(--text-primary) !important;
     -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
 }
 
 /* Headings & hierarchy */
 h1, h2, h3, .navbar-title, .glass-card h2, .glass-card h3 {
     font-family: 'Inter', 'Plus Jakarta Sans', sans-serif !important;
-    color: #E6F3FA !important;
+    color: var(--text-primary) !important;
     font-weight: 800 !important;
     letter-spacing: -0.01em !important;
 }
@@ -845,7 +963,7 @@ h2 { font-size: 22px; }
 h3 { font-size: 18px; }
 
 /* Subtitles and captions */
-.caption, .stCaption, .glass-card .caption { color: #9fb0c0 !important; font-weight:500 !important; }
+.caption, .stCaption, .glass-card .caption { color: var(--text-muted) !important; font-weight:500 !important; }
 
 section[data-testid="stSidebar"], [data-testid="collapsedControl"], header[data-testid="stHeader"] {
     display: none !important;
@@ -894,13 +1012,13 @@ div[data-testid="column"] button[key^="nav_"] p {
 }
 
 .glass-card {
-    background: linear-gradient(180deg, rgba(8,18,30,0.64), rgba(10,20,34,0.56)) !important;
+    background: linear-gradient(180deg, rgba(14, 34, 48, 0.82), rgba(11, 28, 40, 0.74)) !important;
     backdrop-filter: blur(8px) saturate(120%) !important;
     -webkit-backdrop-filter: blur(8px) saturate(120%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
     border-radius: 18px !important;
     padding: 22px !important;
-    box-shadow: 0 8px 30px rgba(2,8,20,0.6), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+    box-shadow: 0 8px 30px rgba(2, 10, 16,0.55), inset 0 1px 0 rgba(255,255,255,0.02) !important;
     transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s !important;
     position: relative;
     overflow: hidden;
@@ -910,16 +1028,16 @@ div[data-testid="column"] button[key^="nav_"] p {
    match glass-card, so widgets that need real nesting (charts, radios, etc.)
    don't have to rely on the broken open/close-div markdown trick. */
 div[data-testid="stVerticalBlockBorderWrapper"] {
-    background: linear-gradient(180deg, rgba(8,18,30,0.64), rgba(10,20,34,0.56)) !important;
+    background: linear-gradient(180deg, rgba(14, 34, 48, 0.82), rgba(11, 28, 40, 0.74)) !important;
     border: 1px solid rgba(255, 255, 255, 0.06) !important;
     border-radius: 18px !important;
-    box-shadow: 0 8px 30px rgba(2,8,20,0.6), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+    box-shadow: 0 8px 30px rgba(2, 10, 16,0.55), inset 0 1px 0 rgba(255,255,255,0.02) !important;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stRadio"],
 div[data-testid="stRadio"],
 div[role="radiogroup"],
 div[role="radiogroup"] * {
-    color: #D7E1EC !important;
+    color: #D7EAE0 !important;
 }
 
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stRadio"] label,
@@ -934,7 +1052,7 @@ div[data-testid="stRadio"] button div,
 div[role="radiogroup"] label,
 div[role="radiogroup"] span,
 div[role="radiogroup"] button {
-    color: #D7E1EC !important;
+    color: #D7EAE0 !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.06em !important;
@@ -946,7 +1064,7 @@ div[data-testid="stRadio"] button:hover,
 div[role="radiogroup"] button:hover,
 div[role="radiogroup"] label:hover,
 div[role="radiogroup"] span:hover {
-    color: #00E5FF !important;
+    color: var(--accent) !important;
 }
 
 div[data-testid="stRadio"] input:checked + label,
@@ -957,7 +1075,7 @@ div[data-testid="stRadio"] div[role="radiogroup"] label[aria-checked="true"],
 div[role="radiogroup"] button[aria-checked="true"],
 div[role="radiogroup"] button[aria-pressed="true"],
 div[role="radiogroup"] label[aria-checked="true"] {
-    color: #00E5FF !important;
+    color: var(--accent) !important;
 }
 
 /* "Lit up" selected state for the pill/tab-style radio toggles (Heart
@@ -969,16 +1087,16 @@ div[data-testid="stRadio"] button[aria-checked="true"],
 div[data-testid="stRadio"] button[aria-pressed="true"],
 div[role="radiogroup"] button[aria-checked="true"],
 div[role="radiogroup"] button[aria-pressed="true"] {
-    background: rgba(0, 229, 255, 0.15) !important;
-    border: 1px solid rgba(0, 229, 255, 0.35) !important;
+    background: rgba(76, 155, 191, 0.16) !important;
+    border: 1px solid rgba(76, 155, 191, 0.35) !important;
     border-radius: 999px !important;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.18), inset 0 0 0 1px rgba(0, 229, 255, 0.25) !important;
+    box-shadow: 0 0 20px rgba(76, 155, 191, 0.16), inset 0 0 0 1px rgba(76, 155, 191, 0.24) !important;
     transition: all 0.25s ease !important;
 }
 
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"],
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] * {
-    color: #D7E1EC !important;
+    color: #D7EAE0 !important;
     font-weight: 700 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.06em !important;
@@ -986,13 +1104,13 @@ div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] * {
 
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"],
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"] * {
-    color: #00E5FF !important;
+    color: var(--accent) !important;
 }
 
 div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"][data-selected="true"] {
-    background: rgba(0, 229, 255, 0.15) !important;
+    background: rgba(76, 155, 191, 0.16) !important;
     border-radius: 999px !important;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.18), inset 0 0 0 1px rgba(0, 229, 255, 0.25) !important;
+    box-shadow: 0 0 20px rgba(76, 155, 191, 0.16), inset 0 0 0 1px rgba(76, 155, 191, 0.24) !important;
     transition: all 0.25s ease !important;
 }
 
@@ -1001,13 +1119,13 @@ div[data-testid="stRadioGroup"] label[data-testid="stRadioOption"] p {
 }
 
 .glass-card:hover {
-    border-color: rgba(79,139,255,0.18) !important;
-    box-shadow: 0 14px 40px rgba(0, 88, 140, 0.12), inset 0 1px 0 rgba(255,255,255,0.02) !important;
+    border-color: rgba(56, 189, 248,0.18) !important;
+    box-shadow: 0 14px 40px rgba(7, 89, 133, 0.12), inset 0 1px 0 rgba(255,255,255,0.02) !important;
     transform: translateY(-4px) !important;
 }
 
 .metric-card-wrapper {
-    background: rgba(13, 23, 40, 0.75);
+    background: rgba(13, 26, 20, 0.75);
     border-radius: 18px;
     padding: 20px;
     border: 1px solid rgba(255, 255, 255, 0.07);
@@ -1038,7 +1156,7 @@ div[data-testid="stTabs"] div[data-baseweb="tab-border"] {
 div[data-testid="stTabs"] button[data-baseweb="tab"] {
     border-radius: 999px !important;
     padding: 8px 22px !important;
-    color: #D7E1EC !important;
+    color: #D7EAE0 !important;
     font-weight: 700 !important;
     font-size: 12.5px !important;
     text-transform: uppercase !important;
@@ -1053,26 +1171,26 @@ div[data-testid="stTabs"] button[data-baseweb="tab"] p {
 }
 
 div[data-testid="stTabs"] button[data-baseweb="tab"]:hover {
-    color: #00E5FF !important;
-    background: rgba(0, 229, 255, 0.08) !important;
+    color: var(--accent) !important;
+    background: rgba(76, 155, 191, 0.08) !important;
 }
 
 div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
-    background: rgba(0, 229, 255, 0.15) !important;
-    color: #00E5FF !important;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 0 1px rgba(0, 229, 255, 0.3) !important;
+    background: rgba(76, 155, 191, 0.16) !important;
+    color: var(--accent) !important;
+    box-shadow: 0 0 20px rgba(76, 155, 191, 0.15), inset 0 0 0 1px rgba(76, 155, 191, 0.3) !important;
 }
 
 .heart-struct-card {
-    background: rgba(13, 23, 40, 0.75);
+    background: rgba(14, 34, 48, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-left: 3px solid #00E5FF;
+    border-left: 3px solid var(--accent);
     border-radius: 12px;
     padding: 14px 16px;
     height: 100%;
 }
 .heart-struct-title {
-    color: #00E5FF;
+    color: var(--accent);
     font-weight: 800;
     font-size: 12.5px;
     letter-spacing: 0.05em;
@@ -1080,7 +1198,7 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
     margin-bottom: 6px;
 }
 .heart-struct-desc {
-    color: #8A99AD;
+    color: #8FA69C;
     font-size: 12.5px;
     line-height: 1.5;
 }
@@ -1090,7 +1208,7 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #8A99AD;
+    color: #8FA69C;
     margin-bottom: 6px;
 }
 
@@ -1107,7 +1225,7 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
     align-items: center;
     justify-content: space-between;
     padding: 14px 24px;
-    background: rgba(13, 23, 40, 0.85);
+    background: rgba(14, 34, 48, 0.86);
     backdrop-filter: blur(25px);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 24px;
@@ -1124,7 +1242,7 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
 .navbar-title {
     font-size: 20px;
     font-weight: 800;
-    background: linear-gradient(135deg, #FFFFFF 30%, #8A99AD 100%);
+    background: linear-gradient(135deg, #FFFFFF 30%, #8FA69C 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     letter-spacing: -0.02em;
@@ -1133,47 +1251,47 @@ div[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
 .pulse-dot {
     width: 8px;
     height: 8px;
-    background-color: #00E5FF;
+    background-color: var(--pulse);
     border-radius: 50%;
-    box-shadow: 0 0 12px #00E5FF;
+    box-shadow: 0 0 12px var(--pulse);
     animation: pulseGlow 1.8s infinite;
 }
 
 @keyframes pulseGlow {
-    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.7); }
-    70% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(0, 229, 255, 0); }
-    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 229, 255, 0); }
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7); }
+    70% { transform: scale(1.1); box-shadow: 0 0 0 8px rgba(255, 107, 107, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
 }
 
 .stButton > button {
     border-radius: 12px !important;
     border: none !important;
-    background: linear-gradient(135deg, rgba(6,30,54,0.8), rgba(10,18,34,0.8)) !important;
-    color: #DDEFF7 !important;
+    background: linear-gradient(135deg, rgba(14, 34, 48,0.9), rgba(11, 28, 40,0.92)) !important;
+    color: var(--text-primary) !important;
     font-weight: 600 !important;
     font-size: 13.5px !important;
     padding: 0.6rem 1.1rem !important;
     transition: transform 0.18s ease, box-shadow 0.18s ease !important;
-    box-shadow: 0 6px 18px rgba(3,18,35,0.6) !important;
+    box-shadow: 0 6px 18px rgba(3, 17, 13,0.6) !important;
 }
 
 .stButton > button:hover {
     transform: translateY(-2px) !important;
-    box-shadow: 0 10px 26px rgba(0,120,200,0.18) !important;
+    box-shadow: 0 10px 26px rgba(76, 155, 191,0.18) !important;
 }
 
 .stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
-    color: #051022 !important;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--pulse) 100%) !important;
+    color: #05131D !important;
     font-weight: 700 !important;
-    box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
+    box-shadow: 0 6px 30px rgba(76, 155, 191,0.22) !important;
 }
 
 /* Base styles for global text inputs, select elements, containers */
 input, textarea, select, .stTextInput>div>div>input, .stDateInput>div>div>input {
-    background: rgba(13, 23, 40, 0.75) !important;
+    background: rgba(13, 26, 20, 0.75) !important;
     border: 1px solid rgba(255,255,255,0.12) !important;
-    color: #E6F3FA !important;
+    color: #EAF7F0 !important;
     padding: 10px 12px !important;
     border-radius: 10px !important;
     outline: none !important;
@@ -1181,12 +1299,12 @@ input, textarea, select, .stTextInput>div>div>input, .stDateInput>div>div>input 
 }
 
 input::placeholder, textarea::placeholder {
-    color: rgba(230,243,250,0.55) !important;
+    color: rgba(234, 247, 240,0.55) !important;
 }
 
 input:focus, textarea:focus, select:focus, .stTextInput>div>div>input:focus {
-    box-shadow: 0 0 28px rgba(124,92,255,0.14), 0 0 8px rgba(0,229,255,0.08) !important;
-    border-color: rgba(124,92,255,0.28) !important;
+    box-shadow: 0 0 28px rgba(245, 158, 11,0.14), 0 0 8px rgba(16, 185, 129,0.08) !important;
+    border-color: rgba(245, 158, 11,0.28) !important;
 }
 
 /* Universal Streamlit Input Box Styling Override (Fixes White Box Issue Globally) */
@@ -1194,15 +1312,15 @@ div[data-baseweb="input"],
 div[data-baseweb="select"] > div,
 div[data-testid="stTextInput"] > div > div,
 div[data-testid="stSelectbox"] > div > div {
-    background-color: rgba(13, 23, 40, 0.75) !important;
+    background-color: rgba(13, 26, 20, 0.75) !important;
     border: 1px solid rgba(255, 255, 255, 0.12) !important;
     border-radius: 10px !important;
-    color: #E6F3FA !important;
+    color: #EAF7F0 !important;
 }
 
 div[data-baseweb="input"] input, 
 div[data-baseweb="select"] input {
-    color: #E6F3FA !important;
+    color: #EAF7F0 !important;
     background-color: transparent !important;
 }
 
@@ -1225,7 +1343,7 @@ div[data-testid="stChatInput"] div[data-baseweb="base-input"],
 .stChatInput div[data-baseweb="textarea"],
 .stChatInput div[data-baseweb="input"],
 .stChatInput div[data-baseweb="base-input"] {
-    background-color: rgba(13, 23, 40, 0.85) !important;
+    background-color: rgba(13, 26, 20, 0.85) !important;
     border: 1px solid rgba(255, 255, 255, 0.12) !important;
     border-radius: 10px !important;
 }
@@ -1236,21 +1354,21 @@ div[data-testid="stChatInput"] textarea,
 .stChatInput textarea {
     background-color: transparent !important;
     border: none !important;
-    color: #E6F3FA !important;
+    color: #EAF7F0 !important;
 }
 
 div[data-testid="stChatInput"] div[data-baseweb="textarea"]:focus-within,
 div[data-testid="stChatInput"] div[data-baseweb="input"]:focus-within {
     outline: none !important;
     box-shadow: none !important;
-    border-color: rgba(0, 229, 255, 0.4) !important;
+    border-color: rgba(76, 155, 191, 0.4) !important;
 }
 
 div[data-testid="stChatInput"] input::placeholder,
 div[data-testid="stChatInput"] textarea::placeholder,
 .stChatInput input::placeholder,
 .stChatInput textarea::placeholder {
-    color: rgba(230,243,250,0.55) !important;
+    color: rgba(234, 247, 240,0.55) !important;
 }
 
 /* The fixed footer bar that st.chat_input renders into defaults to
@@ -1266,8 +1384,8 @@ div[data-testid="stChatInputContainer"],
 div[data-testid="stChatInputContainer"] *,
 .stChatFloatingInputContainer,
 .stChatFloatingInputContainer * {
-    background: #07121a !important;
-    background-color: #07121a !important;
+    background: #071410 !important;
+    background-color: #071410 !important;
     box-shadow: none !important;
     border-color: transparent !important;
 }
@@ -1278,22 +1396,22 @@ div[data-testid="stBottom"] {
 
 /* Universal Streamlit Download Button Override */
 div.stDownloadButton > button {
-    background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
-    color: #051022 !important;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--pulse) 100%) !important;
+    color: #05131D !important;
     font-weight: 700 !important;
     border-radius: 12px !important;
     border: none !important;
     padding: 0.6rem 1.1rem !important;
-    box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
+    box-shadow: 0 6px 30px rgba(56, 189, 248,0.25) !important;
     transition: all 0.2s ease !important;
 }
 
 div.stDownloadButton > button:hover {
     transform: translateY(-2px) !important;
-    box-shadow: 0 10px 35px rgba(0,229,255,0.4) !important;
+    box-shadow: 0 10px 35px rgba(76, 155, 191,0.28) !important;
 }
 
-.metric-title { color:#9fb0c0 !important; font-weight:700 !important; }
+.metric-title { color:#9AB0A5 !important; font-weight:700 !important; }
 .metric-value, .vital-card-value { font-family: 'Inter', 'JetBrains Mono', monospace !important; }
 .report-metric-value { font-family: 'Inter', 'JetBrains Mono', monospace !important; }
 
@@ -1312,7 +1430,7 @@ div.stDownloadButton > button:hover {
 }
 
 .vital-card {
-    background: linear-gradient(160deg, rgba(17, 28, 46, 0.85) 0%, rgba(10, 18, 32, 0.9) 100%);
+    background: linear-gradient(160deg, rgba(14, 26, 20, 0.85) 0%, rgba(10, 22, 17, 0.9) 100%);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 18px;
     padding: 20px 22px;
@@ -1351,7 +1469,7 @@ div.stDownloadButton > button:hover {
 .vital-card-title {
     font-size: 12px;
     font-weight: 700;
-    color: #8A99AD;
+    color: #8FA69C;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 4px;
@@ -1378,39 +1496,39 @@ div.stDownloadButton > button:hover {
 }
 .vital-card-desc {
     font-size: 11.5px;
-    color: #6E7C91;
+    color: #7A9088;
     line-height: 1.4;
 }
 
 .alert-banner {
-    background: rgba(255, 77, 109, 0.15);
-    border: 1px solid #FF4D6D;
+    background: rgba(244, 63, 94, 0.15);
+    border: 1px solid #F43F5E;
     border-radius: 16px;
     padding: 16px 20px;
     margin-bottom: 24px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 0 25px rgba(255, 77, 109, 0.2);
+    box-shadow: 0 0 25px rgba(244, 63, 94, 0.2);
 }
 
 .chat-bubble-user {
-    background: linear-gradient(135deg, rgba(79, 139, 255, 0.2), rgba(124, 92, 255, 0.2));
-    border: 1px solid rgba(124, 92, 255, 0.3);
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(245, 158, 11, 0.2));
+    border: 1px solid rgba(245, 158, 11, 0.3);
     border-radius: 18px 18px 2px 18px;
     padding: 14px 18px;
-    color: #F0F4F8;
+    color: #F0F7F2;
     margin-bottom: 12px;
     max-width: 80%;
     margin-left: auto;
 }
 
 .chat-bubble-ai {
-    background: rgba(13, 23, 40, 0.8);
-    border: 1px solid rgba(0, 229, 255, 0.2);
+    background: rgba(13, 26, 20, 0.8);
+    border: 1px solid rgba(16, 185, 129, 0.2);
     border-radius: 18px 18px 18px 2px;
     padding: 14px 18px;
-    color: #E2E8F0;
+    color: #E2EDE6;
     margin-bottom: 12px;
     max-width: 85%;
     box-shadow: 0 4px 20px rgba(0,0,0,0.2);
@@ -1424,9 +1542,9 @@ div.stDownloadButton > button:hover {
     display: inline-block;
     margin-left: 6px;
 }
-.trend-up { background: rgba(0, 229, 255, 0.15); color: #00E5FF; }
-.trend-down { background: rgba(255, 77, 109, 0.15); color: #FF4D6D; }
-.trend-neutral { background: rgba(255, 255, 255, 0.1); color: #8A99AD; }
+.trend-up { background: rgba(76, 155, 191, 0.15); color: var(--accent); }
+.trend-down { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+.trend-neutral { background: rgba(255, 255, 255, 0.1); color: var(--text-muted); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1493,7 +1611,7 @@ def render_metric_card(title, value_str, color, micro_insight="", trend_str="", 
         <div class="metric-card-wrapper" style="border-top: 3px solid {color};">
             <div class="metric-title">{title} {trend_html}</div>
             <div class="metric-value">{value_str}</div>
-            <div style="font-size: 12px; color: #8A99AD; margin-top: 6px; line-height: 1.4;">
+            <div style="font-size: 12px; color: #8FA69C; margin-top: 6px; line-height: 1.4;">
                 {micro_insight}
             </div>
             <div style="position: absolute; top: 18px; right: 18px; width: 8px; height: 8px; border-radius: 50%; background: {color}; box-shadow: 0 0 10px {color};"></div>
@@ -1542,9 +1660,9 @@ def render_score_gauge(score):
             'bgcolor': "rgba(255,255,255,0.03)",
             'borderwidth': 0,
             'steps': [
-                {'range': [0, 50], 'color': "rgba(255, 77, 109, 0.15)"},
-                {'range': [50, 75], 'color': "rgba(255, 183, 3, 0.15)"},
-                {'range': [75, 100], 'color': "rgba(0, 229, 255, 0.15)"},
+                {'range': [0, 50], 'color': "rgba(244, 63, 94, 0.15)"},
+                {'range': [50, 75], 'color': "rgba(251, 191, 36, 0.15)"},
+                {'range': [75, 100], 'color': "rgba(16, 185, 129, 0.15)"},
             ],
         }
     ))
@@ -1558,7 +1676,7 @@ def render_score_gauge(score):
 
 def render_ecg_animation(hr):
     html_code = f"""
-    <div style="background: rgba(8, 17, 31, 0.9); border-radius: 16px; padding: 12px; border: 1px solid rgba(0, 229, 255, 0.2); box-shadow: inset 0 0 20px rgba(0,229,255,0.05);">
+    <div style="background: rgba(14, 34, 48, 0.86); border-radius: 16px; padding: 12px; border: 1px solid rgba(76, 155, 191, 0.24); box-shadow: inset 0 0 20px rgba(255, 107, 107,0.05);">
     <canvas id="ecgCanvas" width="900" height="130" style="width:100%; display:block;"></canvas>
     </div>
     <script>
@@ -1570,9 +1688,9 @@ def render_ecg_animation(hr):
 
     function drawECG() {{
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = "#00E5FF";
+        ctx.strokeStyle = "#FF6B6B";
         ctx.shadowBlur = 8;
-        ctx.shadowColor = "#00E5FF";
+        ctx.shadowColor = "#FF6B6B";
         ctx.lineWidth = 2.5;
         ctx.beginPath();
         const midY = canvas.height / 2;
@@ -1679,17 +1797,17 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
             #container {{ width: 100%; height: 100%; min-height: 500px; position: relative; }}
             #infoBox {{
                 position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-                background: rgba(8, 17, 31, 0.85); backdrop-filter: blur(12px);
-                border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 14px;
+                background: rgba(14, 34, 48, 0.86); backdrop-filter: blur(12px);
+                border: 1px solid rgba(76, 155, 191, 0.25); border-radius: 14px;
                 padding: 10px 20px; color: #FFFFFF; font-size: 12.5px; font-weight: 600;
                 text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
                 pointer-events: none; transition: all 0.2s ease;
                 z-index: 10; max-width: 85%;
             }}
-            .part-tag {{ color: #00E5FF; font-weight: 700; }}
+            .part-tag {{ color: #4C9BBF; font-weight: 700; }}
             #loading {{
                 position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                color: #00E5FF; font-size: 13px; font-weight: 700; letter-spacing: 0.05em;
+                color: #4C9BBF; font-size: 13px; font-weight: 700; letter-spacing: 0.05em;
                 z-index: 5; text-align: center; width: 80%;
             }}
             #hud {{
@@ -1809,8 +1927,8 @@ def render_3d_heart(hr=72, hrv=55, resting_hr=61, blood_pressure_variability=5, 
                 geo.center();
                 geo.computeVertexNormals();
                 const mat = new THREE.MeshStandardMaterial({{
-                    color: 0xb5121b, roughness: 0.35, metalness: 0.15,
-                    emissive: 0x2a0508, emissiveIntensity: 0.4
+                    color: 0xff6b6b, roughness: 0.35, metalness: 0.15,
+                    emissive: 0x2a0b0f, emissiveIntensity: 0.35
                 }});
                 const mesh = new THREE.Mesh(geo, mat);
                 mesh.rotation.x = Math.PI;
@@ -2203,9 +2321,26 @@ def get_weekly_story():
                 )
             else:
                 raise
-        return (response.text or "").strip() or "Gemini returned no response."
+
+        text = (response.text or "").strip()
+
+        # If we still hit MAX_TOKENS even with thinking off, double the
+        # budget once and retry rather than returning a half-finished story.
+        try:
+            finish_reason = response.candidates[0].finish_reason
+        except Exception:
+            finish_reason = None
+        if finish_reason is not None and "MAX_TOKENS" in str(finish_reason):
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.7, "max_output_tokens": 6000},
+            )
+            text = (response.text or "").strip()
+
+        return text or "Gemini returned no response."
     except Exception as exc:
-        return f"Couldn't generate your weekly story right now: {exc}"
+        return f"Couldn't generate your weekly story right now: {_friendly_gemini_error(exc)}"
 
 
 @st.cache_data(show_spinner=False)
@@ -2392,15 +2527,45 @@ def get_anomaly_alert_message(anomalies):
         "Assistant would say it at the start of a chat. Don't diagnose. Suggest they keep an eye on it "
         "and mention a clinician if it persists."
     )
+    fallback = "Heads up — a couple of readings look off from your usual baseline:\n" + facts
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config={"temperature": 0.6, "max_output_tokens": 300},
-        )
-        return (response.text or "").strip() or ("Heads up — a couple of readings look off from your usual baseline:\n" + facts)
+        # Same fix as get_weekly_story()/get_symptom_risk_assessment(): thinking
+        # models burn part of max_output_tokens on invisible reasoning before
+        # writing the visible answer, which was cutting this off mid-sentence.
+        # Turn thinking off (falling back for model versions that reject the
+        # field), and retry once with a bigger budget if we still hit MAX_TOKENS.
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.6, "max_output_tokens": 1000, "thinking_config": {"thinking_budget": 0}},
+            )
+        except genai_errors.APIError as thinking_exc:
+            if "INVALID_ARGUMENT" in str(thinking_exc) or getattr(thinking_exc, "code", None) == 400:
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config={"temperature": 0.6, "max_output_tokens": 1000},
+                )
+            else:
+                raise
+
+        text = (response.text or "").strip()
+        try:
+            finish_reason = response.candidates[0].finish_reason
+        except Exception:
+            finish_reason = None
+        if finish_reason is not None and "MAX_TOKENS" in str(finish_reason):
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.6, "max_output_tokens": 2000},
+            )
+            text = (response.text or "").strip()
+
+        return text or fallback
     except Exception:
-        return "Heads up — a couple of readings look off from your usual baseline:\n" + facts
+        return fallback
 
 
 def get_symptom_risk_assessment(symptoms, extra_notes):
@@ -2432,20 +2597,64 @@ def get_symptom_risk_assessment(symptoms, extra_notes):
     )
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config={"temperature": 0.4, "max_output_tokens": 400},
-        )
+        # Same fix as get_weekly_story(): thinking models burn part of
+        # max_output_tokens on invisible reasoning before writing the
+        # visible answer, which was truncating the JSON mid-string
+        # (surfacing as "Unterminated string" from json.loads). Turn
+        # thinking off, with a fallback for model versions that reject
+        # the field.
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.4, "max_output_tokens": 3000, "thinking_config": {"thinking_budget": 0}},
+            )
+        except genai_errors.APIError as thinking_exc:
+            if "INVALID_ARGUMENT" in str(thinking_exc) or getattr(thinking_exc, "code", None) == 400:
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=prompt,
+                    config={"temperature": 0.4, "max_output_tokens": 3000},
+                )
+            else:
+                raise
         raw = (response.text or "").strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(raw)
+
+        # If we still hit MAX_TOKENS even at 3000, double the budget once
+        # and retry rather than failing outright — some prompts/models
+        # eat more invisible reasoning tokens than others.
+        try:
+            finish_reason = response.candidates[0].finish_reason
+        except Exception:
+            finish_reason = None
+        if finish_reason is not None and "MAX_TOKENS" in str(finish_reason) and not raw.rstrip().endswith("}"):
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config={"temperature": 0.4, "max_output_tokens": 6000},
+            )
+            raw = (response.text or "").strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as parse_exc:
+            # Surface WHY it broke instead of just the parser error, so we
+            # can tell truncation apart from genuinely malformed JSON.
+            finish_reason = None
+            try:
+                finish_reason = response.candidates[0].finish_reason
+            except Exception:
+                pass
+            diag = f"finish_reason={finish_reason}, {len(raw)} chars received: {raw[:120]!r}"
+            return 0, None, f"Couldn't complete the assessment: {parse_exc} [{diag}]"
         adjustment = int(parsed.get("adjustment", 0))
         adjustment = max(-30, min(0, adjustment))
         explanation = str(parsed.get("explanation", "")).strip()
         return adjustment, explanation, None
-    except (genai_errors.APIError, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
-        return 0, None, f"Couldn't complete the assessment: {exc}"
+    except (genai_errors.APIError, ValueError, TypeError, KeyError) as exc:
+        return 0, None, f"Couldn't complete the assessment: {_friendly_gemini_error(exc)}"
 
 
 def build_report_window(period_key, custom_start=None, custom_end=None):
@@ -2612,11 +2821,11 @@ def generate_share_card(score, resting_hr, hrv, sleep_quality, streak_days,
     person's heart score and a few headline stats, in PulseGuard's
     cyan/purple dark theme. Returns raw PNG bytes."""
     W, H = 1080, 1920
-    CYAN = (0, 229, 255)
-    PURPLE = (124, 92, 255)
-    BG_TOP = (10, 18, 32)
+    CYAN = (16, 185, 129)
+    PURPLE = (245, 158, 11)
+    BG_TOP = (10, 22, 17)
     BG_BOTTOM = (5, 10, 20)
-    TEXT = (230, 243, 250)
+    TEXT = (234, 247, 240)
     MUTED = (138, 153, 173)
 
     # Vertical gradient background
@@ -2631,15 +2840,15 @@ def generate_share_card(score, resting_hr, hrv, sleep_quality, streak_days,
     # Soft glow blobs behind the ring, echoing the app's radial accents
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow)
-    glow_draw.ellipse([W * 0.5 - 420, 560, W * 0.5 + 420, 1400], fill=(0, 229, 255, 40))
-    glow_draw.ellipse([W * 0.5 - 300, 620, W * 0.5 + 300, 1340], fill=(124, 92, 255, 35))
+    glow_draw.ellipse([W * 0.5 - 420, 560, W * 0.5 + 420, 1400], fill=(16, 185, 129, 40))
+    glow_draw.ellipse([W * 0.5 - 300, 620, W * 0.5 + 300, 1340], fill=(245, 158, 11, 35))
     glow = glow.filter(ImageFilter.GaussianBlur(120))
     bg = Image.alpha_composite(bg, glow)
 
     draw = ImageDraw.Draw(bg)
 
     # Header wordmark
-    draw.ellipse([W / 2 - 34, 96, W / 2 + 34, 164], fill=(0, 229, 255, 255))
+    draw.ellipse([W / 2 - 34, 96, W / 2 + 34, 164], fill=(16, 185, 129, 255))
     _draw_heart_icon(draw, W / 2, 130, 60, (5, 16, 32))
     _draw_centered_text(draw, (W / 2, 220), "PulseGuard", _story_font(56, bold=True), TEXT)
     _draw_centered_text(draw, (W / 2, 270), "HEART HEALTH INTELLIGENCE", _story_font(22, bold=True), MUTED)
@@ -2669,9 +2878,9 @@ def generate_share_card(score, resting_hr, hrv, sleep_quality, streak_days,
         _draw_centered_text(draw, (ring_cx, ring_cy + 210), f"{patient_name}'s cardiovascular snapshot", _story_font(24), MUTED)
 
     trend_labels = {
-        "improving": ("Trending up this month", (0, 229, 255)),
-        "declining": ("Keep an eye on this month", (255, 77, 109)),
-        "steady": ("Holding steady this month", (255, 183, 3)),
+        "improving": ("Trending up this month", (16, 185, 129)),
+        "declining": ("Keep an eye on this month", (244, 63, 94)),
+        "steady": ("Holding steady this month", (251, 191, 36)),
     }
     trend_text, trend_color = trend_labels.get(trend_word, trend_labels["steady"])
     _draw_centered_text(draw, (ring_cx, ring_cy + ring_r + 55), trend_text, _story_font(26, bold=True), trend_color)
@@ -2714,11 +2923,11 @@ def generate_doctor_report_pdf(rows, period_label, patient_name=""):
     generated_on = datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
     summary = summarize_report_rows(rows)
 
-    pdf.set_fill_color(8, 17, 31)
+    pdf.set_fill_color(8, 20, 15)
     pdf.rect(0, 0, pdf.w, 32, style="F")
     pdf.set_xy(pdf.l_margin, 8)
     pdf.set_font("Helvetica", "B", 20)
-    pdf.set_text_color(0, 229, 255)
+    pdf.set_text_color(16, 185, 129)
     pdf.cell(content_width, 10, _pdf_safe("PulseGuard Cardiology Report"), ln=True)
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 10)
@@ -2789,7 +2998,7 @@ class _PulseGuardPDF(FPDF):
         self.set_text_color(140, 140, 140)
         self.cell(0, 8, _pdf_safe(f"PulseGuard Health Report  |  Page {self.page_no()}"), align="C")
 
-def _pdf_section_header(pdf, text, content_width, rgb=(13, 23, 40)):
+def _pdf_section_header(pdf, text, content_width, rgb=(13, 26, 20)):
     pdf.set_fill_color(*rgb)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
@@ -2806,11 +3015,11 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
     content_width = pdf.w - pdf.l_margin - pdf.r_margin
     generated_on = datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
 
-    pdf.set_fill_color(8, 17, 31)
+    pdf.set_fill_color(8, 20, 15)
     pdf.rect(0, 0, pdf.w, 32, style="F")
     pdf.set_xy(pdf.l_margin, 8)
     pdf.set_font("Helvetica", "B", 20)
-    pdf.set_text_color(0, 229, 255)
+    pdf.set_text_color(16, 185, 129)
     pdf.cell(content_width, 10, _pdf_safe("PulseGuard Cardiovascular Telemetry Export"), ln=True)
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Helvetica", "", 10)
@@ -2837,7 +3046,7 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
         score_rgb = (191, 144, 0)
         score_word = "Fair"
     else:
-        score_rgb = (255, 77, 109)
+        score_rgb = (244, 63, 94)
         score_word = "Needs Attention"
 
     pdf.set_fill_color(245, 247, 250)
@@ -2884,7 +3093,7 @@ def generate_pdf_report(score, positives, concerns, ai_insight, heart_rate, rest
         pdf.ln(2)
 
     if concerns:
-        _pdf_section_header(pdf, "Findings Warranting Follow-Up", content_width, rgb=(255, 77, 109))
+        _pdf_section_header(pdf, "Findings Warranting Follow-Up", content_width, rgb=(244, 63, 94))
         pdf.set_font("Helvetica", "", 10.5)
         for c in concerns:
             pdf.set_x(pdf.l_margin)
@@ -2912,9 +3121,9 @@ def animate_score(final_score):
     st.markdown(
         f"""
         <div class="glass-card" style="text-align:center; padding:32px;">
-            <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8A99AD;">Overall Vital Status</div>
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:#8FA69C;">Overall Vital Status</div>
             <div style="font-size:56px; font-weight:800; color:{c}; margin:8px 0; text-shadow:0 0 30px {hex_to_rgba(c, 0.4)};">
-                {final_score}<span style="font-size:24px; color:#8A99AD;">/100</span>
+                {final_score}<span style="font-size:24px; color:#8FA69C;">/100</span>
             </div>
             <div style="display:inline-block; padding:4px 16px; border-radius:20px; background:{hex_to_rgba(c,0.15)}; color:{c}; font-weight:600; font-size:13px; border:1px solid {hex_to_rgba(c,0.3)};">
                 {"EXCELLENT" if final_score>=80 else ("STABLE" if final_score>=60 else "ATTENTION REQUIRED")}
@@ -2929,11 +3138,13 @@ def animate_score(final_score):
 # --------------------------------------------------
 NAV_ITEMS = [
     "🏠 Home",
-    "❤️ Heart Dashboard",
+    "❤️ Heart Health",
     "⌚ Smartwatch",
     "📈 Health Summary",
     "🤖 AI Assistant",
     "🧠 AI Insights",
+    "⚙️ Settings",
+    "📝 Survey",
     "ℹ️ About"
 ]
 
@@ -2946,6 +3157,153 @@ if "heart_dashboard_tab" not in st.session_state:
 if "health_summary_scroll_target" not in st.session_state:
     st.session_state.health_summary_scroll_target = None
 
+
+def render_alert_settings():
+    """Notification settings: proactive email alerts + emergency contact.
+    Lives on the Settings page (moved out of Device & Controls, which is
+    for simulating the wearable device rather than account preferences)."""
+    st.subheader("📧 Proactive Email Alerts")
+    st.caption(
+        "PulseGuard will email you when it detects a reading that's unusual for "
+        "*your* own baseline — it doesn't wait for you to open the app."
+    )
+    with st.form("alert_settings_form"):
+        sms_col1, sms_col2 = st.columns([2, 1])
+        with sms_col1:
+            _alert_email_input = st.text_input(
+                "Email address to send alerts to",
+                value=st.session_state.alert_email,
+            )
+        with sms_col2:
+            _sms_enabled_input = st.checkbox(
+                "Enable email alerts", value=st.session_state.sms_alerts_enabled
+            )
+
+        st.markdown("<div style='margin-top:6px;'></div>", unsafe_allow_html=True)
+        st.caption(
+            "🚨 **Emergency contact** — someone PulseGuard can notify if you need help "
+            "or your score drops low (a family member, friend, or caregiver)."
+        )
+        _emergency_email_input = st.text_input(
+            "Emergency contact's email address",
+            value=st.session_state.emergency_contact_email,
+            placeholder="e.g. mom@example.com",
+        )
+
+        _alert_submitted = st.form_submit_button("💾 Submit", use_container_width=True)
+
+    if _alert_submitted:
+        _alert_email_input = _alert_email_input.strip()
+        _emergency_email_input = _emergency_email_input.strip()
+        if _sms_enabled_input and not _alert_email_input:
+            st.session_state.alert_settings_status = ("error", "Enter an email address before enabling alerts.")
+        else:
+            st.session_state.alert_email = _alert_email_input
+            st.session_state.sms_alerts_enabled = _sms_enabled_input
+            st.session_state.emergency_contact_email = _emergency_email_input
+            _saved_msgs = []
+            if _sms_enabled_input:
+                _saved_msgs.append(f"you'll get email alerts at {_alert_email_input}")
+            else:
+                _saved_msgs.append("email alerts are turned off")
+            if _emergency_email_input:
+                _saved_msgs.append(f"emergency contact set to {_emergency_email_input}")
+            st.session_state.alert_settings_status = ("success", "Saved! " + "; ".join(_saved_msgs) + ".")
+
+    _alert_status = st.session_state.get("alert_settings_status")
+    if _alert_status:
+        _status_kind, _status_msg = _alert_status
+        getattr(st, _status_kind)(_status_msg)
+
+    if st.session_state.sms_alerts_enabled and not email_alerts_configured():
+        st.warning(
+            "Email alerts are turned on, but the sending account isn't configured yet "
+            "on the backend (needs ALERT_EMAIL_ADDRESS and ALERT_EMAIL_APP_PASSWORD in "
+            "st.secrets — see the setup comment near the top of app.py)."
+        )
+
+    if st.session_state.emergency_contact_email:
+        st.caption(
+            f"✅ {st.session_state.emergency_contact_email} will be emailed automatically "
+            "whenever PulseGuard detects your score has dropped — no extra action needed."
+        )
+
+
+SUBSCRIPTION_PRICE_STR = "$7.99/mo"
+
+
+def render_subscription_paywall(feature_name):
+    """Mock paywall shown in place of a gated AI feature. This is a
+    front-end sample only — the 'card form' below does not talk to a
+    real payment processor. It exists so you can see how the upsell
+    and checkout flow would look and feel before wiring up real
+    billing (e.g. Stripe Checkout / Billing)."""
+    st.markdown(
+        f"""
+        <div class="glass-card" style="text-align:center; padding:40px 24px;">
+            <div style="font-size:40px;">🔒</div>
+            <h2 style="margin:8px 0 4px 0;">{feature_name} is a Premium Feature</h2>
+            <p style="color:#8FA69C; max-width:520px; margin:0 auto;">
+                Unlock the AI Assistant chat and AI Insights (weekly story, correlation
+                explorer, heart age & trajectory) with PulseGuard Premium.
+            </p>
+            <div style="font-size:32px; font-weight:800; color:#10B981; margin-top:16px;">
+                {SUBSCRIPTION_PRICE_STR}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("<div style='margin-top:20px;'></div>", unsafe_allow_html=True)
+
+    _pw_col1, _pw_col2 = st.columns([1, 1])
+    with _pw_col1:
+        st.markdown(
+            """
+            <div class="glass-card">
+                <h4 style="margin-top:0;">✅ What's included</h4>
+                <p style="color:#C9E0D2;">
+                🤖 Unlimited AI Assistant chat<br>
+                🧠 Weekly AI-generated health story<br>
+                🔗 Correlation explorer<br>
+                📈 Heart age & 30-day trajectory<br>
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with _pw_col2:
+        st.markdown("<h4 style='margin-top:0;'>💳 Payment (sample only)</h4>", unsafe_allow_html=True)
+        st.caption("This is a demo checkout UI — no real card is charged and nothing is sent anywhere.")
+        with st.form("mock_subscribe_form"):
+            st.text_input("Name on card", placeholder="Jane Doe", key="mock_card_name")
+            st.text_input("Card number", placeholder="4242 4242 4242 4242", key="mock_card_number", max_chars=19)
+            _exp_col, _cvc_col = st.columns(2)
+            with _exp_col:
+                st.text_input("Expiry", placeholder="MM/YY", key="mock_card_exp", max_chars=5)
+            with _cvc_col:
+                st.text_input("CVC", placeholder="123", key="mock_card_cvc", max_chars=4, type="password")
+            _subscribe_clicked = st.form_submit_button(
+                f"🔓 Subscribe — {SUBSCRIPTION_PRICE_STR}", use_container_width=True
+            )
+        if _subscribe_clicked:
+            st.session_state.is_subscribed = True
+            st.success("Subscribed! (Sample flow — no real payment was processed.)")
+            st.rerun()
+
+    st.caption(
+        "In production this card form would be replaced with a real payment "
+        "provider's hosted checkout (e.g. Stripe Checkout/Elements) — PulseGuard "
+        "should never collect or store raw card numbers itself."
+    )
+
+
+def ai_features_unlocked():
+    # Guests get a preview of the paywall too, but subscribing as a guest
+    # won't persist since guest sessions aren't saved to the sheet.
+    return st.session_state.is_subscribed
+
+
 page = st.session_state.current_page
 
 # --------------------------------------------------
@@ -2957,7 +3315,7 @@ page = st.session_state.current_page
 # switched tabs. Defining them first guarantees they're always instantiated
 # before any rerun can fire, so their value never gets treated as stale.
 # --------------------------------------------------
-_devctrl_col, _devctrl_spacer, _boot_logout_col = st.columns([3.4, 6.6, 1.5])
+_devctrl_col, _boot_logout_col = st.columns([8.6, 1.4])
 with _boot_logout_col:
     if st.button(f"🔓 Log out ({st.session_state.auth_username})", use_container_width=True, key="logout_top"):
         st.session_state.logged_in = False
@@ -3005,29 +3363,6 @@ with _devctrl_expander:
         st.session_state.autoplay = st.checkbox(
             "▶️ Auto-Play Demo Scenarios",
             value=st.session_state.autoplay
-        )
-
-    st.markdown("---")
-    st.subheader("📧 Proactive Email Alerts")
-    st.caption(
-        "PulseGuard will email you when it detects a reading that's unusual for "
-        "*your* own baseline — it doesn't wait for you to open the app."
-    )
-    sms_col1, sms_col2 = st.columns([2, 1])
-    with sms_col1:
-        st.session_state.alert_email = st.text_input(
-            "Email address to send alerts to",
-            value=st.session_state.alert_email,
-        )
-    with sms_col2:
-        st.session_state.sms_alerts_enabled = st.checkbox(
-            "Enable email alerts", value=st.session_state.sms_alerts_enabled
-        )
-    if st.session_state.sms_alerts_enabled and not email_alerts_configured():
-        st.warning(
-            "Email alerts are turned on, but the sending account isn't configured yet "
-            "on the backend (needs ALERT_EMAIL_ADDRESS and ALERT_EMAIL_APP_PASSWORD in "
-            "st.secrets — see the setup comment near the top of app.py)."
         )
 
     st.markdown("---")
@@ -3084,22 +3419,47 @@ if st.session_state.sms_alerts_enabled and st.session_state.alert_email:
                 if _sent:
                     st.session_state.last_sms_alert_date = _today_str
 
+# --------------------------------------------------
+# Emergency contact alert — fires automatically (no button press) whenever
+# the person's score has dropped, independent of and throttled separately
+# from the alert above (once per day), the same way it's checked on every
+# app load/rerun.
+# --------------------------------------------------
+if st.session_state.emergency_contact_email:
+    _today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    if st.session_state.get("last_emergency_alert_date") != _today_str:
+        _ec_anomalies = detect_anomalies()
+        _ec_score, _, _ = generate_health_summary()
+        if _ec_anomalies or _ec_score < 60:
+            _who = st.session_state.patient_name.strip() or st.session_state.auth_username or "This user"
+            _ec_message = (
+                f"{_who} needs help, or their PulseGuard heart score is low "
+                f"({_ec_score}/100). Please check up on them, or call for medical "
+                f"help if this seems urgent."
+            )
+            _ec_sent, _ec_err = send_sms_alert(
+                st.session_state.emergency_contact_email,
+                _ec_message,
+            )
+            if _ec_sent:
+                st.session_state.last_emergency_alert_date = _today_str
+
 # Application Layout Header
 st.markdown(
     f"""
     <div class="top-navbar">
         <div class="navbar-brand">
-            <img src="{LOGO_URL}" width="38" style="border-radius:10px; filter: drop-shadow(0 0 8px rgba(0,229,255,0.4));">
+            <img src="{LOGO_URL}" width="38" style="border-radius:10px; filter: drop-shadow(0 0 8px rgba(16, 185, 129,0.4));">
             <div>
                 <div class="navbar-title">PulseGuard</div>
             </div>
-            <div style="display:flex; align-items:center; gap:6px; background:rgba(0, 229, 255, 0.08); border:1px solid rgba(0, 229, 255, 0.2); padding:4px 12px; border-radius:20px; margin-left:12px;">
+            <div style="display:flex; align-items:center; gap:6px; background:rgba(255, 107, 107, 0.12); border:1px solid rgba(255, 107, 107, 0.24); padding:4px 12px; border-radius:20px; margin-left:12px;">
                 <div class="pulse-dot"></div>
-                <span style="font-size:11px; font-weight:700; color:#00E5FF; letter-spacing:0.05em;">LIVE MONITORING</span>
+                <span style="font-size:11px; font-weight:700; color:#FF6B6B; letter-spacing:0.05em;">LIVE MONITORING</span>
             </div>
         </div>
         <div style="display:flex; align-items:center; gap:16px;">
-            <div style="font-size:12px; color:#8A99AD; font-family:'JetBrains Mono', monospace;">
+            <div style="font-size:12px; color:#8FA69C; font-family:'JetBrains Mono', monospace;">
                 {datetime.now(ZoneInfo("America/New_York")).strftime("%b %d, %Y")}
             </div>
         </div>
@@ -3109,14 +3469,32 @@ st.markdown(
 )
 
 # Pill Navigation Bar
-_nav_cols = st.columns(len(NAV_ITEMS))
-for _col, _item in zip(_nav_cols, NAV_ITEMS):
-    with _col:
-        _is_active = st.session_state.current_page == _item
-        if st.button(_item, key=f"nav_{_item}", use_container_width=True,
-                     type="primary" if _is_active else "secondary"):
-            st.session_state.current_page = _item
-            st.rerun()
+st.markdown(
+    """
+    <style>
+    /* Bigger top nav pills (Home / Heart Health / Smartwatch / etc.) */
+    .st-key-main_nav_bar .stButton > button {
+        font-size: 26px !important;
+        font-weight: 800 !important;
+        padding: 1.4rem 1rem !important;
+        min-height: 78px !important;
+        line-height: 1.25 !important;
+        white-space: normal !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+_nav_bar = st.container(key="main_nav_bar")
+with _nav_bar:
+    _nav_cols = st.columns(len(NAV_ITEMS))
+    for _col, _item in zip(_nav_cols, NAV_ITEMS):
+        with _col:
+            _is_active = st.session_state.current_page == _item
+            if st.button(_item, key=f"nav_{_item}", use_container_width=True,
+                         type="primary" if _is_active else "secondary"):
+                st.session_state.current_page = _item
+                st.rerun()
 
 st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
@@ -3133,31 +3511,31 @@ if page == "🏠 Home":
 
     st.markdown(
         f"""
-        <div class="glass-card" style="padding:28px; background: linear-gradient(135deg, rgba(13, 23, 40, 0.95) 0%, rgba(8, 17, 31, 0.98) 100%);">
+        <div class="glass-card" style="padding:28px; background: linear-gradient(135deg, rgba(13, 26, 20, 0.95) 0%, rgba(8, 20, 15, 0.98) 100%);">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:20px;">
                 <div>
                     <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
                         <span style="font-size:28px; font-weight:800; color:#FFFFFF;">{time_greeting}! 👋</span>
-                        <div style="display:flex; align-items:center; gap:8px; background:rgba(0, 229, 255, 0.1); border:1px solid rgba(0, 229, 255, 0.3); padding:4px 14px; border-radius:20px;">
+                        <div style="display:flex; align-items:center; gap:8px; background:rgba(255, 107, 107, 0.12); border:1px solid rgba(255, 107, 107, 0.24); padding:4px 14px; border-radius:20px;">
                             <div class="pulse-dot"></div>
-                            <span style="font-size:12px; font-weight:700; color:#00E5FF; letter-spacing:0.04em;">LIVE {st.session_state.heart_rate} BPM</span>
+                            <span style="font-size:12px; font-weight:700; color:#FF6B6B; letter-spacing:0.04em;">LIVE {st.session_state.heart_rate} BPM</span>
                         </div>
                     </div>
-                    <div style="font-size:18px; font-weight:600; color:#E2E8F0;">
+                    <div style="font-size:18px; font-weight:600; color:#E2EDE6;">
                         Your heart health is looking steady and resilient today.
                     </div>
-                    <div style="font-size:13px; color:#8A99AD; margin-top:6px;">
+                    <div style="font-size:13px; color:#8FA69C; margin-top:6px;">
                         Continuous telemetry streaming from {st.session_state.selected_watch} • Synced {last_sync}
                     </div>
                 </div>
                 <div style="display:flex; align-items:center; gap:16px;">
                     <div style="background:{hex_to_rgba(_score_color, 0.12)}; border:1px solid {hex_to_rgba(_score_color, 0.35)}; padding:12px 20px; border-radius:18px; text-align:center;">
-                        <div style="font-size:11px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.06em;">Vital Score</div>
-                        <div style="font-size:28px; font-weight:800; color:{_score_color}; font-family:'Plus Jakarta Sans';">{_today_score}<span style="font-size:14px; color:#8A99AD;">/100</span></div>
+                        <div style="font-size:11px; font-weight:700; color:#8FA69C; text-transform:uppercase; letter-spacing:0.06em;">Vital Score</div>
+                        <div style="font-size:28px; font-weight:800; color:{_score_color}; font-family:'Plus Jakarta Sans';">{_today_score}<span style="font-size:14px; color:#8FA69C;">/100</span></div>
                     </div>
-                    <div style="background:rgba(255, 183, 3, 0.1); border:1px solid rgba(255, 183, 3, 0.3); padding:12px 20px; border-radius:18px; text-align:center;">
-                        <div style="font-size:11px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.06em;">Active Streak</div>
-                        <div style="font-size:28px; font-weight:800; color:#FFB703;">🔥 {st.session_state.streak_days} <span style="font-size:14px; color:#8A99AD;">Days</span></div>
+                    <div style="background:rgba(251, 191, 36, 0.1); border:1px solid rgba(251, 191, 36, 0.3); padding:12px 20px; border-radius:18px; text-align:center;">
+                        <div style="font-size:11px; font-weight:700; color:#8FA69C; text-transform:uppercase; letter-spacing:0.06em;">Active Streak</div>
+                        <div style="font-size:28px; font-weight:800; color:#FBBF24;">🔥 {st.session_state.streak_days} <span style="font-size:14px; color:#8FA69C;">Days</span></div>
                     </div>
                 </div>
             </div>
@@ -3176,13 +3554,13 @@ if page == "🏠 Home":
 
     st.markdown(
         f"""
-        <div class="glass-card" style="border-left: 4px solid #00E5FF; padding:18px 24px;">
+        <div class="glass-card" style="border-left: 5px solid #4C9BBF; padding:26px 30px;">
             <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
-                <div style="display:flex; align-items:center; gap:14px;">
-                    <div style="font-size:24px; background:rgba(0,229,255,0.12); padding:10px; border-radius:14px;">🎯</div>
+                <div style="display:flex; align-items:center; gap:18px;">
+                    <div style="font-size:34px; background:rgba(16, 185, 129,0.12); padding:14px; border-radius:16px;">🎯</div>
                     <div>
-                        <div style="font-size:12px; font-weight:800; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em;">Today's Recommended Focus</div>
-                        <div style="font-size:14px; color:#F0F4F8; font-weight:600; margin-top:2px;">{focus_insight}</div>
+                        <div style="font-size:15px; font-weight:800; color:#4C9BBF; text-transform:uppercase; letter-spacing:0.08em;">Today's Mission</div>
+                        <div style="font-size:19px; color:#F0F7F2; font-weight:600; margin-top:4px;">{focus_insight}</div>
                     </div>
                 </div>
             </div>
@@ -3193,7 +3571,7 @@ if page == "🏠 Home":
 
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:12px; font-weight:700; color:#8FA69C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
     qa_cols = st.columns(6)
     with qa_cols[0]:
         def _simulate_quick_vitals():
@@ -3215,7 +3593,7 @@ if page == "🏠 Home":
             st.rerun()
     with qa_cols[3]:
         if st.button("🫀 Open 3D Heart Model", use_container_width=True):
-            st.session_state.current_page = "❤️ Heart Dashboard"
+            st.session_state.current_page = "❤️ Heart Health"
             st.session_state.heart_dashboard_tab = "🫀 3D MODEL"
             st.rerun()
     with qa_cols[4]:
@@ -3236,9 +3614,9 @@ if page == "🏠 Home":
     if st.session_state.show_symptom_check:
         with st.container(border=True):
             st.markdown(
-                "<div style='font-size:14px; font-weight:800; color:#00E5FF; text-transform:uppercase; "
+                "<div style='font-size:14px; font-weight:800; color:var(--accent); text-transform:uppercase; "
                 "letter-spacing:0.06em; margin-bottom:4px;'>🩺 Symptom Check-In</div>"
-                "<div style='font-size:13px; color:#8A99AD; margin-bottom:14px;'>"
+                "<div style='font-size:13px; color:#8FA69C; margin-bottom:14px;'>"
                 "Tell us how you're actually feeling and we'll factor it into your Vital Score, "
                 "on top of your wearable readings.</div>",
                 unsafe_allow_html=True,
@@ -3290,13 +3668,13 @@ if page == "🏠 Home":
                 <div style="font-size:12px; font-weight:800; color:{WARN}; text-transform:uppercase; letter-spacing:0.06em;">
                     🩺 Symptom Check-In Applied ({st.session_state.symptom_check_at})
                 </div>
-                <div style="font-size:13px; color:#E2E8F0; margin-top:4px;">{st.session_state.symptom_risk_note or ''}</div>
+                <div style="font-size:13px; color:#E2EDE6; margin-top:4px;">{st.session_state.symptom_risk_note or ''}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    st.markdown("<div style='font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>📊 Core Telemetry Metrics</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:12px; font-weight:700; color:#8FA69C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:12px;'>📊 Core Telemetry Metrics</div>", unsafe_allow_html=True)
     
     hr_status, hr_color, _ = metric_status("heart_rate", heart_rate)
     rhr_status, rhr_color, _ = metric_status("resting_hr", resting_hr)
@@ -3319,17 +3697,17 @@ if page == "🏠 Home":
 
     with col_timeline:
         st.markdown('<div class="glass-card" style="padding:22px;">', unsafe_allow_html=True)
-        st.markdown("<div style='font-size:12px; font-weight:800; color:#00E5FF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px;'>🕒 Live Telemetry Activity Feed</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:800; color:#4C9BBF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px;'>🕒 Live Telemetry Activity Feed</div>", unsafe_allow_html=True)
         
         feed_html = "<div style='display:flex; flex-direction:column; gap:12px;'>"
         for item in st.session_state.activity_feed[:4]:
             feed_html += f"""
             <div style='display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:8px;'>
                 <div style='display:flex; align-items:center; gap:10px;'>
-                    <div style='width:6px; height:6px; border-radius:50%; background:#00E5FF;'></div>
-                    <span style='font-size:13px; color:#F0F4F8; font-weight:500;'>{item['event']}</span>
+                    <div style='width:6px; height:6px; border-radius:50%; background:#4C9BBF;'></div>
+                    <span style='font-size:13px; color:#F0F7F2; font-weight:500;'>{item['event']}</span>
                 </div>
-                <span style='font-size:11px; color:#8A99AD; font-family:"JetBrains Mono";'>{item['time']}</span>
+                <span style='font-size:11px; color:#8FA69C; font-family:"JetBrains Mono";'>{item['time']}</span>
             </div>
             """
         feed_html += "</div>"
@@ -3338,29 +3716,29 @@ if page == "🏠 Home":
 
     with col_habits:
         st.markdown('<div class="glass-card" style="padding:22px;">', unsafe_allow_html=True)
-        st.markdown("<div style='font-size:12px; font-weight:800; color:#7C5CFF; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px;'>🎯 Goal Rings & Habit Progress</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:800; color:#F59E0B; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px;'>🎯 Goal Rings & Habit Progress</div>", unsafe_allow_html=True)
 
         step_pct = min(100, int((steps / 10000) * 100))
-        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>👟 Step Goal ({steps:,} / 10,000)</span><span style='color:#00E5FF; font-weight:700;'>{step_pct}%</span></div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{step_pct}%; background:#00E5FF;'></div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>👟 Step Goal ({steps:,} / 10,000)</span><span style='color:#4C9BBF; font-weight:700;'>{step_pct}%</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{step_pct}%; background:#4C9BBF;'></div></div>", unsafe_allow_html=True)
 
         st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
-        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>😴 Sleep Quality Target</span><span style='color:#7C5CFF; font-weight:700;'>{sleep_quality}%</span></div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{sleep_quality}%; background:#7C5CFF;'></div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>😴 Sleep Quality Target</span><span style='color:#F59E0B; font-weight:700;'>{sleep_quality}%</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{sleep_quality}%; background:#F59E0B;'></div></div>", unsafe_allow_html=True)
 
         st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
         hyd_pct = min(100, int((st.session_state.hydration_oz / 64) * 100))
-        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>💧 Hydration Goal ({st.session_state.hydration_oz} / 64 oz)</span><span style='color:#4F8BFF; font-weight:700;'>{hyd_pct}%</span></div>", unsafe_allow_html=True)
-        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{hyd_pct}%; background:#4F8BFF;'></div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='display:flex; justify-content:space-between; font-size:13px;'><span>💧 Hydration Goal ({st.session_state.hydration_oz} / 64 oz)</span><span style='color:#38BDF8; font-weight:700;'>{hyd_pct}%</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='progress-container'><div class='progress-bar' style='width:{hyd_pct}%; background:#38BDF8;'></div></div>", unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =====================================================
 # HEART DASHBOARD PAGE
 # =====================================================
-elif page == "❤️ Heart Dashboard":
+elif page == "❤️ Heart Health":
 
     st.markdown("<h2 style='font-weight:800;'>❤️ Cardiovascular Analytics</h2>", unsafe_allow_html=True)
     st.caption("Deep-dive metrics evaluating real-time heart rate dynamics and autonomic recovery.")
@@ -3447,12 +3825,12 @@ elif page == "⌚ Smartwatch":
     with col1:
         st.markdown(
             f"""
-            <div class="glass-card" style="border-left: 4px solid #00E5FF;">
-                <div style="font-size:12px; font-weight:700; color:#8A99AD; text-transform:uppercase;">Connected Device</div>
+            <div class="glass-card" style="border-left: 4px solid #4C9BBF;">
+                <div style="font-size:12px; font-weight:700; color:#8FB0C1; text-transform:uppercase;">Connected Device</div>
                 <div style="font-size:28px; font-weight:800; color:#FFFFFF; margin:8px 0;">{watch_plain_name}</div>
                 <div style="display:flex; gap:16px; margin-top:16px;">
-                    <div><span style="color:#8A99AD; font-size:12px;">Battery:</span> <strong style="color:#00E5FF;">{battery}%</strong></div>
-                    <div><span style="color:#8A99AD; font-size:12px;">Last Sync:</span> <strong>{last_sync}</strong></div>
+                    <div><span style="color:#8FB0C1; font-size:12px;">Battery:</span> <strong style="color:#4C9BBF;">{battery}%</strong></div>
+                    <div><span style="color:#8FB0C1; font-size:12px;">Last Sync:</span> <strong>{last_sync}</strong></div>
                 </div>
             </div>
             """,
@@ -3474,26 +3852,26 @@ elif page == "⌚ Smartwatch":
 
     components.html(
         """
-        <div style="font-family: Inter, sans-serif; color: #E6F3FA; max-width: 480px;">
+        <div style="font-family: Inter, sans-serif; color: #EAF7F0; max-width: 480px;">
             <div style="position:relative; width:320px; height:240px; border-radius:12px; overflow:hidden;
                         background:#000; border:1px solid rgba(255,255,255,0.1);">
                 <video id="pg-video" autoplay playsinline muted
                     style="width:100%; height:100%; object-fit:cover; transform:scaleX(-1);"></video>
                 <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
                             pointer-events:none;">
-                    <div style="width:130px; height:170px; border:2px dashed rgba(0,229,255,0.6); border-radius:50%;"></div>
+                    <div style="width:130px; height:170px; border:2px dashed rgba(16, 185, 129,0.6); border-radius:50%;"></div>
                 </div>
             </div>
             <canvas id="pg-canvas" width="64" height="64" style="display:none;"></canvas>
 
             <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
-                <button id="pg-start-btn" style="background:#00E5FF; color:#07121a; border:none; padding:10px 18px;
+                <button id="pg-start-btn" style="background:#4C9BBF; color:#071722; border:none; padding:10px 18px;
                     border-radius:8px; font-weight:700; cursor:pointer;">▶ Start 20s Scan</button>
-                <div id="pg-status" style="font-size:13px; color:#8A99AD;">Camera not started yet.</div>
+                <div id="pg-status" style="font-size:13px; color:#8FB0C1;">Camera not started yet.</div>
             </div>
 
             <div style="margin-top:10px; height:6px; width:320px; background:rgba(255,255,255,0.08); border-radius:4px; overflow:hidden;">
-                <div id="pg-progress" style="height:100%; width:0%; background:#00E5FF; transition:width 0.2s linear;"></div>
+                <div id="pg-progress" style="height:100%; width:0%; background:#4C9BBF; transition:width 0.2s linear;"></div>
             </div>
 
             <div id="pg-result" style="margin-top:16px; font-size:15px;"></div>
@@ -3599,7 +3977,7 @@ elif page == "⌚ Smartwatch":
                 }
 
                 if (peakTimes.length < 4) {
-                    resultBox.innerHTML = '<div style="color:#FF6B6B;">Couldn\\'t get a clear reading. ' +
+                    resultBox.innerHTML = '<div style="color:#FB7185;">Couldn\\'t get a clear reading. ' +
                         'Try again with brighter, steady lighting and stay still.</div>';
                     status.textContent = 'Scan complete — low signal quality.';
                     startBtn.disabled = false;
@@ -3617,8 +3995,8 @@ elif page == "⌚ Smartwatch":
 
                 status.textContent = 'Scan complete.';
                 resultBox.innerHTML =
-                    '<div style="font-size:34px; font-weight:800; color:#00E5FF;">' + bpm + ' BPM</div>' +
-                    '<div style="color:#8A99AD; font-size:13px; margin-top:4px;">Detected from ' + peakTimes.length +
+                    '<div style="font-size:34px; font-weight:800; color:#FF6B6B;">' + bpm + ' BPM</div>' +
+                    '<div style="color:#8FB0C1; font-size:13px; margin-top:4px;">Detected from ' + peakTimes.length +
                     ' pulses over 20 seconds. Type this number into the field below to apply it to your dashboard.</div>';
 
                 startBtn.disabled = false;
@@ -3679,7 +4057,7 @@ elif page == "📈 Health Summary":
         with trend_label_col:
             st.markdown(
                 f"""
-                <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#8A99AD;">Score trend, last {trend_range}</div>
+                <div style="font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:#8FA69C;">Score trend, last {trend_range}</div>
                 <div style="font-size:14px; color:{delta_color}; margin-top:2px;">{delta_sign}{trend_delta} vs {trend_range} ago</div>
                 """,
                 unsafe_allow_html=True,
@@ -3706,7 +4084,7 @@ elif page == "📈 Health Summary":
                 f"""
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span style="font-size:18px;">⚡</span>
-                    <span style="font-size:14px; color:#E6F3FA;">{driver_label} is the biggest drag on today's score.</span>
+                    <span style="font-size:14px; color:#EAF7F0;">{driver_label} is the biggest drag on today's score.</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -3716,7 +4094,7 @@ elif page == "📈 Health Summary":
                 """
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span style="font-size:18px;">✨</span>
-                    <span style="font-size:14px; color:#E6F3FA;">Every tracked metric is in a healthy range today.</span>
+                    <span style="font-size:14px; color:#EAF7F0;">Every tracked metric is in a healthy range today.</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -3746,9 +4124,9 @@ elif page == "📈 Health Summary":
         """
         <style>
         /* Report card theme matching overall glass style */
-        .st-key-report_card { color: #EAF6FF !important; }
+        .st-key-report_card { color: #EAF9F0 !important; }
         .st-key-report_card .report-metric-value { color: #FFFFFF !important; font-weight:800; font-size:36px; opacity:1 !important; text-shadow: 0 2px 10px rgba(0,0,0,0.6); }
-        .st-key-report_card .report-metric-label { color:#9fb0c0 !important; font-size:12px; margin-top:6px; }
+        .st-key-report_card .report-metric-label { color:#9AB0A5 !important; font-size:12px; margin-top:6px; }
 
         /* Direct native input overrides to enforce dark background & match UI scheme */
         .st-key-report_card input[type="text"],
@@ -3756,27 +4134,27 @@ elif page == "📈 Health Summary":
         .st-key-report_card div[data-baseweb="input"] > div,
         .st-key-report_card .stTextInput input,
         .st-key-report_card .stSelectbox [data-baseweb="select"] {
-            background-color: rgba(13, 23, 40, 0.75) !important;
+            background-color: rgba(13, 26, 20, 0.75) !important;
             border: 1px solid rgba(255, 255, 255, 0.12) !important;
-            color: #E6F3FA !important;
+            color: #EAF7F0 !important;
             border-radius: 10px !important;
         }
 
         /* Download Button Styling - Dark Primary Gradient */
         .st-key-report_card button[kind="primary"],
         .st-key-report_card div.stDownloadButton > button {
-            background: linear-gradient(135deg, #00E5FF 0%, #7C5CFF 100%) !important;
-            color: #051022 !important;
+            background: linear-gradient(135deg, #10B981 0%, #F59E0B 100%) !important;
+            color: #050F0B !important;
             font-weight: 700 !important;
             border-radius: 12px !important;
             border: none !important;
-            box-shadow: 0 6px 30px rgba(79,139,255,0.25) !important;
+            box-shadow: 0 6px 30px rgba(56, 189, 248,0.25) !important;
             transition: all 0.2s ease !important;
         }
         .st-key-report_card button[kind="primary"]:hover,
         .st-key-report_card div.stDownloadButton > button:hover {
             transform: translateY(-2px) !important;
-            box-shadow: 0 10px 35px rgba(0,229,255,0.4) !important;
+            box-shadow: 0 10px 35px rgba(16, 185, 129,0.4) !important;
         }
         </style>
         """,
@@ -3965,36 +4343,39 @@ elif page == "🤖 AI Assistant":
     st.caption("Ask questions about your telemetry, resting trends, or HRV values.")
     st.markdown("---")
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = [
-            ("assistant", "Hello! I am your PulseGuard AI companion. How can I help analyze your cardiovascular metrics today?")
-        ]
+    if not ai_features_unlocked():
+        render_subscription_paywall("The AI Assistant")
+    else:
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = [
+                ("assistant", "Hello! I am your PulseGuard AI companion. How can I help analyze your cardiovascular metrics today?")
+            ]
 
-    # Proactively flag anything unusual compared to this person's own
-    # baseline, once per session, instead of waiting for them to ask.
-    if not st.session_state.anomaly_alert_shown:
-        st.session_state.anomaly_alert_shown = True
-        anomalies = detect_anomalies()
-        if anomalies:
-            alert_msg = get_anomaly_alert_message(anomalies)
-            if alert_msg:
-                st.session_state.chat_history.append(("assistant", alert_msg))
+        # Proactively flag anything unusual compared to this person's own
+        # baseline, once per session, instead of waiting for them to ask.
+        if not st.session_state.anomaly_alert_shown:
+            st.session_state.anomaly_alert_shown = True
+            anomalies = detect_anomalies()
+            if anomalies:
+                alert_msg = get_anomaly_alert_message(anomalies)
+                if alert_msg:
+                    st.session_state.chat_history.append(("assistant", alert_msg))
 
-    for role, content in st.session_state.chat_history:
-        if role == "user":
-            st.markdown(f'<div class="chat-bubble-user">{content}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="chat-bubble-ai">🤖 <strong>PulseGuard AI:</strong><br>{content}</div>', unsafe_allow_html=True)
+        for role, content in st.session_state.chat_history:
+            if role == "user":
+                st.markdown(f'<div class="chat-bubble-user">{content}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-bubble-ai">🤖 <strong>PulseGuard AI:</strong><br>{content}</div>', unsafe_allow_html=True)
 
-    user_question = st.chat_input("Ask a question about your heart health...")
-    if user_question:
-        with st.spinner("Analyzing your telemetry and preparing a response..."):
-            # Pass everything said so far (before this new message) so Gemini
-            # has real conversation memory instead of starting fresh each time.
-            assistant_response = get_ai_response(user_question, st.session_state.chat_history)
-        st.session_state.chat_history.append(("user", user_question))
-        st.session_state.chat_history.append(("assistant", assistant_response))
-        st.rerun()
+        user_question = st.chat_input("Ask a question about your heart health...")
+        if user_question:
+            with st.spinner("Analyzing your telemetry and preparing a response..."):
+                # Pass everything said so far (before this new message) so Gemini
+                # has real conversation memory instead of starting fresh each time.
+                assistant_response = get_ai_response(user_question, st.session_state.chat_history)
+            st.session_state.chat_history.append(("user", user_question))
+            st.session_state.chat_history.append(("assistant", assistant_response))
+            st.rerun()
 
 # =====================================================
 # AI INSIGHTS PAGE (Weekly Story, Correlation Explorer,
@@ -4006,89 +4387,182 @@ elif page == "🧠 AI Insights":
     st.caption("Deeper, personalized patterns pulled from your history — powered by Gemini.")
     st.markdown("---")
 
-    # --- Weekly Story ---
-    st.markdown("<h3>🗞️ Your Weekly Story</h3>", unsafe_allow_html=True)
-    if st.button("✨ Generate My Weekly Story"):
-        with st.spinner("Reading through your last 7 days..."):
-            st.session_state.weekly_story = get_weekly_story()
-    if st.session_state.weekly_story:
-        st.markdown(
-            f'<div class="glass-card"><p style="color:#c9d6e0;">{st.session_state.weekly_story}</p></div>',
-            unsafe_allow_html=True
-        )
+    if not ai_features_unlocked():
+        render_subscription_paywall("AI Insights")
     else:
-        st.caption("Click the button above for a plain-language recap of your week.")
+        # --- Weekly Story ---
+        st.markdown("<h3>🗞️ Your Weekly Story</h3>", unsafe_allow_html=True)
+        if st.button("✨ Generate My Weekly Story"):
+            with st.spinner("Reading through your last 7 days..."):
+                st.session_state.weekly_story = get_weekly_story()
+        if st.session_state.weekly_story:
+            st.markdown(
+                f'<div class="glass-card"><p style="color:#C9E0D2;">{st.session_state.weekly_story}</p></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.caption("Click the button above for a plain-language recap of your week.")
 
-    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
 
-    # --- Correlation Explorer ---
-    st.markdown("<h3>🔗 Correlation Explorer</h3>", unsafe_allow_html=True)
-    findings = compute_correlations()
-    insight_text = get_correlation_insight(findings)
-    st.markdown(
-        f'<div class="glass-card"><p style="color:#c9d6e0; white-space:pre-line;">{insight_text}</p></div>',
-        unsafe_allow_html=True
-    )
-
-    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
-
-    # --- Heart Age & Predictive Trajectory ---
-    st.markdown("<h3>📈 Heart Age & Trajectory</h3>", unsafe_allow_html=True)
-    age_col, _ = st.columns([1, 2])
-    with age_col:
-        patient_age = st.number_input("Your age", min_value=18, max_value=100, key="patient_age")
-
-    heart_age, current_score = compute_heart_age(patient_age)
-    current_proj, projected_score, slope = compute_score_projection(days_ahead=30)
-
-    hcol1, hcol2 = st.columns(2)
-    with hcol1:
-        age_diff = patient_age - heart_age
-        age_note = (
-            f"{age_diff} years younger than your age" if age_diff > 0
-            else f"{-age_diff} years older than your age" if age_diff < 0
-            else "right in line with your age"
-        )
+        # --- Correlation Explorer ---
+        st.markdown("<h3>🔗 Correlation Explorer</h3>", unsafe_allow_html=True)
+        findings = compute_correlations()
+        insight_text = get_correlation_insight(findings)
         st.markdown(
-            f"""
-            <div class="glass-card">
-                <h4 style="margin-top:0;">❤️ Estimated Heart Age</h4>
-                <div style="font-size:38px; font-weight:800; color:#00E5FF;">{heart_age}</div>
-                <p style="color:#8A99AD;">Based on today's score, your heart is trending {age_note}.
-                This is a simplified, non-clinical illustration — not a medical measurement.</p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    with hcol2:
-        trend_word = "improving" if slope > 0.05 else "declining" if slope < -0.05 else "holding steady"
-        st.markdown(
-            f"""
-            <div class="glass-card">
-                <h4 style="margin-top:0;">🔮 30-Day Projection</h4>
-                <div style="font-size:38px; font-weight:800; color:#00E5FF;">{projected_score}/100</div>
-                <p style="color:#8A99AD;">If your last 30 days continue at the same pace, your heart score
-                is {trend_word} (currently {current_proj}/100). This is a simple trend projection, not a forecast guarantee.</p>
-            </div>
-            """,
+            f'<div class="glass-card"><p style="color:#C9E0D2; white-space:pre-line;">{insight_text}</p></div>',
             unsafe_allow_html=True
         )
 
-    trend_scores = get_score_trend(days=30)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(y=trend_scores, mode="lines", name="Last 30 days", line=dict(color="#00E5FF", width=2)))
-    fig.add_trace(go.Scatter(
-        x=[len(trend_scores) - 1, len(trend_scores) - 1 + 30],
-        y=[trend_scores[-1], projected_score],
-        mode="lines", name="Projected", line=dict(color="#FF6B6B", width=2, dash="dash")
-    ))
-    fig.update_layout(
-        height=280, margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#8A99AD"), showlegend=True,
-        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", range=[0, 100]),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+
+        # --- Heart Age & Predictive Trajectory ---
+        st.markdown("<h3>📈 Heart Age & Trajectory</h3>", unsafe_allow_html=True)
+        age_col, _ = st.columns([1, 2])
+        with age_col:
+            patient_age = st.number_input("Your age", min_value=18, max_value=100, key="patient_age")
+
+        heart_age, current_score = compute_heart_age(patient_age)
+        current_proj, projected_score, slope = compute_score_projection(days_ahead=30)
+
+        hcol1, hcol2 = st.columns(2)
+        with hcol1:
+            age_diff = patient_age - heart_age
+            age_note = (
+                f"{age_diff} years younger than your age" if age_diff > 0
+                else f"{-age_diff} years older than your age" if age_diff < 0
+                else "right in line with your age"
+            )
+            st.markdown(
+                f"""
+                <div class="glass-card">
+                    <h4 style="margin-top:0;">❤️ Estimated Heart Age</h4>
+                    <div style="font-size:38px; font-weight:800; color:var(--accent);">{heart_age}</div>
+                    <p style="color:#8FA69C;">Based on today's score, your heart is trending {age_note}.
+                    This is a simplified, non-clinical illustration — not a medical measurement.</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        with hcol2:
+            trend_word = "improving" if slope > 0.05 else "declining" if slope < -0.05 else "holding steady"
+            st.markdown(
+                f"""
+                <div class="glass-card">
+                    <h4 style="margin-top:0;">🔮 30-Day Projection</h4>
+                    <div style="font-size:38px; font-weight:800; color:var(--accent);">{projected_score}/100</div>
+                    <p style="color:#8FA69C;">If your last 30 days continue at the same pace, your heart score
+                    is {trend_word} (currently {current_proj}/100). This is a simple trend projection, not a forecast guarantee.</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        trend_scores = get_score_trend(days=30)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=trend_scores, mode="lines", name="Last 30 days", line=dict(color=UI_ACCENT, width=2)))
+        fig.add_trace(go.Scatter(
+            x=[len(trend_scores) - 1, len(trend_scores) - 1 + 30],
+            y=[trend_scores[-1], projected_score],
+            mode="lines", name="Projected", line=dict(color="#FB7185", width=2, dash="dash")
+        ))
+        fig.update_layout(
+            height=280, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#8FA69C"), showlegend=True,
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)", range=[0, 100]),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+# =====================================================
+# SETTINGS PAGE (notifications: proactive alerts + emergency contact)
+# =====================================================
+elif page == "⚙️ Settings":
+
+    st.markdown("<h2 style='font-weight:800;'>⚙️ Settings</h2>", unsafe_allow_html=True)
+    st.caption("Account notification preferences.")
+    st.markdown("---")
+
+    render_alert_settings()
+
+    st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.subheader("💳 Subscription")
+    if st.session_state.is_subscribed:
+        st.success(f"You're subscribed to PulseGuard Premium ({SUBSCRIPTION_PRICE_STR}) — AI features are unlocked.")
+        if st.button("Cancel subscription (sample)"):
+            st.session_state.is_subscribed = False
+            st.rerun()
+    else:
+        st.caption("Unlock the AI Assistant and AI Insights with PulseGuard Premium.")
+        render_subscription_paywall("PulseGuard Premium")
+
+# =====================================================
+# SURVEY PAGE (feedback survey → its own Google Sheet tab)
+# =====================================================
+elif page == "📝 Survey":
+
+    st.markdown("<h2 style='font-weight:800;'>📝 Help Us Improve PulseGuard</h2>", unsafe_allow_html=True)
+    st.caption("A couple of quick questions, plus a spot to tell us anything else.")
+    st.markdown("---")
+
+    if st.session_state.survey_submitted:
+        st.success("Thanks — your feedback has been recorded! 💙")
+        if st.button("Submit another response"):
+            st.session_state.survey_submitted = False
+            st.rerun()
+    else:
+        with st.form("pulseguard_survey_form"):
+            q1 = st.radio(
+                "1. How easy is PulseGuard to use?",
+                ["Very easy", "Somewhat easy", "Neutral", "Somewhat difficult", "Very difficult"],
+                index=None,
+            )
+            q2 = st.radio(
+                "2. Which feature do you use the most?",
+                ["Heart rate scanner", "AI Assistant", "AI Insights",
+                 "Health Summary / reports", "Smartwatch simulation", "Alerts"],
+                index=None,
+            )
+            q3 = st.radio(
+                "3. Is there a feature you feel is missing?",
+                ["No, it has everything I need", "Yes, I'll describe it below",
+                 "Not sure yet"],
+                index=None,
+            )
+            q4 = st.radio(
+                "4. How likely are you to recommend PulseGuard to a friend or family member?",
+                ["Very likely", "Likely", "Neutral", "Unlikely", "Very unlikely"],
+                index=None,
+            )
+            free_text = st.text_area(
+                "Anything else you think would make PulseGuard better?",
+                placeholder="Type anything on your mind — new features, bugs, confusing bits, praise...",
+                height=120,
+            )
+            survey_submit = st.form_submit_button("📨 Submit Feedback", use_container_width=True)
+
+        if survey_submit:
+            if not (q1 and q2 and q3 and q4):
+                st.error("Please answer all four questions before submitting.")
+            else:
+                try:
+                    _survey_ws = get_survey_worksheet()
+                    _save_survey_response(
+                        _survey_ws,
+                        st.session_state.auth_username,
+                        {
+                            "q1_easy_to_use": q1,
+                            "q2_favorite_feature": q2,
+                            "q3_missing_feature": q3,
+                            "q4_recommend": q4,
+                        },
+                        free_text,
+                    )
+                    st.session_state.survey_submitted = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Couldn't save your feedback right now: {exc}")
 
 # =====================================================
 # ABOUT PAGE
@@ -4102,7 +4576,7 @@ elif page == "ℹ️ About":
         """
         <div class="glass-card">
             <h3>Who We Are</h3>
-            <p style="color:#8A99AD;">
+            <p style="color:#8FA69C;">
                 PulseGuard is developed in coordination with New Jersey Heart Disease Prevention (NJHDP),
                 an initiative focused on reducing preventable cardiovascular disease through early, accessible
                 insight. We build tools that turn everyday wearable data into something people can actually
@@ -4119,7 +4593,7 @@ elif page == "ℹ️ About":
             """
             <div class="glass-card">
                 <h3>🎯 Our Mission</h3>
-                <p style="color:#8A99AD;">
+                <p style="color:#8FA69C;">
                     Heart disease remains one of the leading causes of preventable death, and much of the
                     risk builds quietly over years before it's ever diagnosed. PulseGuard exists to close
                     that gap — surfacing trends in heart rate, HRV, resting heart rate, and sleep so problems
@@ -4134,7 +4608,7 @@ elif page == "ℹ️ About":
             """
             <div class="glass-card">
                 <h3>🌱 Our Goals</h3>
-                <p style="color:#8A99AD;">
+                <p style="color:#8FA69C;">
                     We're working toward wearable-driven insights that are genuinely understandable —
                     not just data dashboards, but clear, actionable guidance. Longer term, we want PulseGuard
                     to help lower the age at which cardiovascular risk is first caught, and to make that kind
@@ -4150,7 +4624,7 @@ elif page == "ℹ️ About":
         """
         <div class="glass-card">
             <h3>⚠️ A Note on What This Is</h3>
-            <p style="color:#8A99AD;">
+            <p style="color:#8FA69C;">
                 PulseGuard is an informational and educational tool. It is not a diagnostic device and does
                 not replace a doctor. Always talk to a clinician about any concerning symptoms or before
                 making changes to your care based on what you see here.
@@ -4166,7 +4640,7 @@ elif page == "ℹ️ About":
 st.markdown("<div style='margin-top: 40px;'></div>", unsafe_allow_html=True)
 st.markdown(
     """
-    <div style="text-align:center; padding:24px; color:#8A99AD; font-size:12px; border-top:1px solid rgba(255,255,255,0.05);">
+    <div style="text-align:center; padding:24px; color:#8FA69C; font-size:12px; border-top:1px solid rgba(255,255,255,0.05);">
         PulseGuard Health Telemetry • Version 2.0 Actionable Dashboard<br>
         New Jersey Heart Disease Prevention (NJHDP)
     </div>
