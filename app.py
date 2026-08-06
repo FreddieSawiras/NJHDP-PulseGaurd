@@ -50,9 +50,59 @@ else:
     GEMINI_API_KEY_SOURCE = "not set"
 
 
+# Scopes needed to call Vertex AI with a service account. Separate from
+# AUTH_SCOPES (Sheets/Drive) below since Vertex needs cloud-platform access
+# instead — same service account JSON, different scope grant.
+VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
+
+def _get_vertex_config():
+    """Build (project, location, credentials) for Vertex AI from the same
+    gcp_service_account secret already used for the Google Sheets
+    integration, if one is configured. Returns None (never raises) if it
+    can't be built, so callers can cleanly fall back to the API-key path.
+    """
+    try:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+    except Exception:
+        return None
+    project = creds_dict.get("project_id")
+    if not project:
+        return None
+    location = (_secret("GEMINI_VERTEX_LOCATION", "us-central1") or "us-central1").strip()
+    try:
+        from google.oauth2.service_account import Credentials as _SACredentials
+        creds = _SACredentials.from_service_account_info(creds_dict, scopes=VERTEX_SCOPES)
+    except Exception:
+        return None
+    return project, location, creds
+
+
 @st.cache_resource
 def get_gemini_client():
-    """Create (once) and cache the Gemini client for the app's lifetime."""
+    """Create (once) and cache the Gemini client for the app's lifetime.
+
+    Prefers Vertex AI, authenticated with the same Google service account
+    already used for Sheets. That path uses a short-lived OAuth2 access
+    token rather than an AI-Studio API key, which sidesteps the ongoing
+    "AQ." key / ACCESS_TOKEN_TYPE_UNSUPPORTED issue entirely (it only
+    affects generativelanguage.googleapis.com API-key auth, not Vertex's
+    aiplatform.googleapis.com with OAuth2 credentials).
+
+    Requires the service account to have the "Vertex AI User"
+    (roles/aiplatform.user) IAM role on the project, and the Vertex AI
+    API enabled on that project. Falls back to the plain API-key client
+    (GEMINI_API_KEY) if Vertex can't be configured or fails to build —
+    so nothing breaks for setups that only have an API key.
+    """
+    vertex_config = _get_vertex_config()
+    if vertex_config is not None:
+        project, location, creds = vertex_config
+        try:
+            return genai.Client(vertexai=True, project=project, location=location, credentials=creds)
+        except Exception:
+            pass  # fall through to the API-key client below
+
     if not GEMINI_API_KEY:
         return None
     return genai.Client(api_key=GEMINI_API_KEY)
@@ -71,8 +121,13 @@ def _friendly_gemini_error(exc):
             "Gemini rejected the request (401 ACCESS_TOKEN_TYPE_UNSUPPORTED). "
             "This is a known, currently-open issue on Google's side affecting "
             "newly issued 'AQ.' format API keys — it isn't something in this "
-            "app's code. Try restricting the key to 'Gemini API only' in AI "
-            "Studio, or file a report at https://ai.google.dev/gemini-api/docs/api-key."
+            "app's code. If gcp_service_account is set in secrets (used for "
+            "Sheets), the app will now automatically use Vertex AI with that "
+            "service account instead of the API key — just make sure it has "
+            "the 'Vertex AI User' role and the Vertex AI API is enabled on "
+            "the project. Otherwise, try restricting the key to 'Gemini API "
+            "only' in AI Studio, or file a report at "
+            "https://ai.google.dev/gemini-api/docs/api-key."
         )
     return text
 
