@@ -741,11 +741,11 @@ _defaults = {
     "alert_email": "",
     "sms_alerts_enabled": False,
     "emergency_contact_email": "",
-    "last_emergency_alert_date": None,
+    "last_emergency_alert_key": None,
     "symptom_risk_adjustment": 0,
     "symptom_risk_note": None,
     "symptom_check_at": None,
-    "last_sms_alert_date": None,
+    "last_sms_alert_key": None,
     "show_symptom_check": False,
 }
 
@@ -3451,54 +3451,6 @@ with _devctrl_expander:
 watch_connected = True
 last_sync = datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p")
 
-# --------------------------------------------------
-# Proactive email alert — runs on every app load/rerun (not just when the
-# person opens the AI Assistant tab), so PulseGuard reaches out on its own
-# the moment it sees something unusual, throttled to one email per day per
-# account. Note: this only fires while the app is actually running — a
-# true always-on watcher (emailing even while nobody has the app open)
-# would need a separate scheduled job (cron / cloud function) hitting this
-# same detect_anomalies() + send_sms_alert() logic outside of Streamlit.
-# --------------------------------------------------
-if st.session_state.sms_alerts_enabled and st.session_state.alert_email:
-    _today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-    if st.session_state.get("last_sms_alert_date") != _today_str:
-        _sms_anomalies = detect_anomalies()
-        if _sms_anomalies:
-            _sms_msg = get_anomaly_alert_message(_sms_anomalies)
-            if _sms_msg:
-                _sent, _err = send_sms_alert(
-                    st.session_state.alert_email,
-                    f"PulseGuard alert: {_sms_msg}",
-                )
-                if _sent:
-                    st.session_state.last_sms_alert_date = _today_str
-
-# --------------------------------------------------
-# Emergency contact alert — fires automatically (no button press) whenever
-# the person's score has dropped, independent of and throttled separately
-# from the alert above (once per day), the same way it's checked on every
-# app load/rerun.
-# --------------------------------------------------
-if st.session_state.emergency_contact_email:
-    _today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-    if st.session_state.get("last_emergency_alert_date") != _today_str:
-        _ec_anomalies = detect_anomalies()
-        _ec_score, _, _ = generate_health_summary()
-        if _ec_anomalies or _ec_score < 60:
-            _who = st.session_state.patient_name.strip() or st.session_state.auth_username or "This user"
-            _ec_message = (
-                f"{_who} needs help, or their PulseGuard heart score is low "
-                f"({_ec_score}/100). Please check up on them, or call for medical "
-                f"help if this seems urgent."
-            )
-            _ec_sent, _ec_err = send_sms_alert(
-                st.session_state.emergency_contact_email,
-                _ec_message,
-            )
-            if _ec_sent:
-                st.session_state.last_emergency_alert_date = _today_str
-
 # Application Layout Header
 st.markdown(
     f"""
@@ -4695,6 +4647,67 @@ st.markdown(
 )
 
 # --------------------------------------------------
+# Proactive email alert — runs on every app load/rerun (not just when the
+# person opens the AI Assistant tab), so PulseGuard reaches out on its own
+# the moment it sees something unusual. This block intentionally lives
+# here, at the very end of the script, AFTER every page (including
+# Settings, where render_alert_settings() applies this run's form
+# submission to session_state) has already rendered — so it always sees
+# the freshest alert_email/emergency_contact_email, even on the exact
+# rerun where the person just hit Submit.
+#
+# Throttled to one email per day PER RECIPIENT (date, address) rather
+# than per day overall — so submitting a new address doesn't get silently
+# swallowed for the rest of the day just because *a* email already went
+# out today to whatever the old address was.
+#
+# Note: this only fires while the app is actually running — a true
+# always-on watcher (emailing even while nobody has the app open) would
+# need a separate scheduled job (cron / cloud function) hitting this same
+# detect_anomalies() + send_sms_alert() logic outside of Streamlit.
+# --------------------------------------------------
+if st.session_state.sms_alerts_enabled and st.session_state.alert_email:
+    _today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    _sms_alert_key = f"{_today_str}|{st.session_state.alert_email}"
+    if st.session_state.get("last_sms_alert_key") != _sms_alert_key:
+        _sms_anomalies = detect_anomalies()
+        if _sms_anomalies:
+            _sms_msg = get_anomaly_alert_message(_sms_anomalies)
+            if _sms_msg:
+                _sent, _err = send_sms_alert(
+                    st.session_state.alert_email,
+                    f"PulseGuard alert: {_sms_msg}",
+                )
+                if _sent:
+                    st.session_state.last_sms_alert_key = _sms_alert_key
+
+# --------------------------------------------------
+# Emergency contact alert — fires automatically (no button press) whenever
+# the person's score has dropped, independent of and throttled separately
+# from the alert above (once per day per recipient), for the same reasons
+# described above.
+# --------------------------------------------------
+if st.session_state.emergency_contact_email:
+    _today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    _ec_alert_key = f"{_today_str}|{st.session_state.emergency_contact_email}"
+    if st.session_state.get("last_emergency_alert_key") != _ec_alert_key:
+        _ec_anomalies = detect_anomalies()
+        _ec_score, _, _ = generate_health_summary()
+        if _ec_anomalies or _ec_score < 60:
+            _who = st.session_state.patient_name.strip() or st.session_state.auth_username or "This user"
+            _ec_message = (
+                f"{_who} needs help, or their PulseGuard heart score is low "
+                f"({_ec_score}/100). Please check up on them, or call for medical "
+                f"help if this seems urgent."
+            )
+            _ec_sent, _ec_err = send_sms_alert(
+                st.session_state.emergency_contact_email,
+                _ec_message,
+            )
+            if _ec_sent:
+                st.session_state.last_emergency_alert_key = _ec_alert_key
+
+# --------------------------------------------------
 # Autosave user data (BPM, HRV, history, etc.) back to their
 # account so it's there next time they log in on any device.
 # Skipped for guests, and skipped if nothing actually changed
@@ -4723,4 +4736,4 @@ if st.session_state.autoplay:
     st.rerun()
 
   #git add .; git commit -m "Update PulseGuard AI"; git push origin main
-#.\.venv\Scripts\Activate.ps1; streamlit run app.py    
+#.\.venv\Scripts\Activate.ps1; streamlit run app.py
