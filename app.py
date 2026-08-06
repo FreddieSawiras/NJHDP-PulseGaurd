@@ -3627,35 +3627,26 @@ if page == "🏠 Home":
     st.markdown("<div style='margin-bottom: 24px;'></div>", unsafe_allow_html=True)
 
     st.markdown("<div style='font-size:12px; font-weight:700; color:#8FA69C; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px;'>⚡ Quick Actions</div>", unsafe_allow_html=True)
-    qa_cols = st.columns(6)
+    qa_cols = st.columns(5)
     with qa_cols[0]:
-        def _simulate_quick_vitals():
-            st.session_state.heart_rate = random.randint(55, 130)
-            st.session_state.resting_hr = random.randint(45, 90)
-            st.session_state.hrv = random.randint(15, 90)
-            st.session_state.steps = random.randint(1000, 14000)
-            st.session_state.activity_feed.insert(0, {"time": "Just now", "event": "Simulated new telemetry sync"})
-
-        st.button("🎲 Simulate New Vitals", use_container_width=True, on_click=_simulate_quick_vitals)
-    with qa_cols[1]:
         if st.button("📋 Download Clinical Report", use_container_width=True):
             st.session_state.current_page = "📈 Health Summary"
             st.session_state.health_summary_scroll_target = "doctor_report"
             st.rerun()
-    with qa_cols[2]:
+    with qa_cols[1]:
         if st.button("🤖 Ask AI Assistant", use_container_width=True):
             st.session_state.current_page = "🤖 AI Assistant"
             st.rerun()
-    with qa_cols[3]:
+    with qa_cols[2]:
         if st.button("🫀 Open 3D Heart Model", use_container_width=True):
             st.session_state.current_page = "❤️ Heart Health"
             st.session_state.heart_dashboard_tab = "🫀 3D MODEL"
             st.rerun()
-    with qa_cols[4]:
+    with qa_cols[3]:
         if st.button("🗞️ Weekly Story", use_container_width=True):
             st.session_state.current_page = "🧠 AI Insights"
             st.rerun()
-    with qa_cols[5]:
+    with qa_cols[4]:
         if st.button("🩺 More Accurate Details", use_container_width=True, type="primary" if st.session_state.symptom_risk_adjustment else "secondary"):
             st.session_state.show_symptom_check = not st.session_state.show_symptom_check
 
@@ -4730,3 +4721,6 @@ if st.session_state.autoplay:
         st.session_state[_k] = _v
     st.session_state.scenario_idx = idx + 1
     st.rerun()
+
+  #git add .; git commit -m "Update PulseGuard AI"; git push origin main
+#.\.venv\Scripts\Activate.ps1; streamlit run app.py    
